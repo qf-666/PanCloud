@@ -20,11 +20,24 @@ struct PanFile: Identifiable, Codable {
     
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        self.fsId = try c.decode(UInt64.self, forKey: .fsId)
+        // Baidu returns fs_id/isdir/size as strings, not numbers
+        if let fsStr = try? c.decode(String.self, forKey: .fsId) {
+            self.fsId = UInt64(fsStr) ?? 0
+        } else {
+            self.fsId = try c.decode(UInt64.self, forKey: .fsId)
+        }
         self.serverFilename = try c.decode(String.self, forKey: .serverFilename)
         self.path = try c.decode(String.self, forKey: .path)
-        self.isDir = try c.decode(Int.self, forKey: .isDir)
-        self.size = try c.decodeIfPresent(Int64.self, forKey: .size) ?? 0
+        if let dirStr = try? c.decode(String.self, forKey: .isDir) {
+            self.isDir = Int(dirStr) ?? 0
+        } else {
+            self.isDir = try c.decode(Int.self, forKey: .isDir)
+        }
+        if let sizeStr = try? c.decode(String.self, forKey: .size) {
+            self.size = Int64(sizeStr) ?? 0
+        } else {
+            self.size = try c.decodeIfPresent(Int64.self, forKey: .size) ?? 0
+        }
         self.dlink = try c.decodeIfPresent(String.self, forKey: .dlink)
     }
 }
