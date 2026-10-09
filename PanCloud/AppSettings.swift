@@ -20,5 +20,3 @@ class AppSettings: ObservableObject {
         self.cookieString = UserDefaults.standard.string(forKey: "cookieString") ?? ""
     }
 }
-
-</content>
