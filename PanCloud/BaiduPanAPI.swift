@@ -9,6 +9,15 @@ struct PanFile: Identifiable, Codable {
     let size: Int64
     let dlink: String?
     
+    init(fsId: UInt64, serverFilename: String, path: String, isDir: Int, size: Int64, dlink: String?) {
+        self.fsId = fsId
+        self.serverFilename = serverFilename
+        self.path = path
+        self.isDir = isDir
+        self.size = size
+        self.dlink = dlink
+    }
+    
     enum CodingKeys: String, CodingKey {
         case fsId = "fs_id"
         case serverFilename = "server_filename"
