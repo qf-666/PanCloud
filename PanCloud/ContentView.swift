@@ -192,11 +192,11 @@ struct ContentView: View {
         message = ""
         Task {
             do {
-                let result = try await XiecloudAPI.shared.parse(url: shareLink, pwd: pwd)
+                let list = try await XiecloudAPI.shared.parseAndList(url: shareLink, pwd: pwd)
                 await MainActor.run {
-                    self.xieFiles = result.list ?? []
+                    self.xieFiles = list
                     self.isLoading = false
-                    self.message = "✅ 协云解析到 \(self.xieFiles.count) 个文件"
+                    self.message = "✅ 协云解析到 \(list.count) 个文件"
                 }
             } catch {
                 await MainActor.run {
