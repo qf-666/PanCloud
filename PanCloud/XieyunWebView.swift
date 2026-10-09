@@ -33,4 +33,3 @@ struct WebViewRepresentable: UIViewRepresentable {
     func updateUIView(_ uiView: WKWebView, context: Context) {}
 }
 
-</content>
