@@ -117,15 +117,30 @@ class BaiduPanAPI {
             guard let http = response as? HTTPURLResponse else { throw APIError.networkError(NSError(domain: "", code: -1)) }
             guard http.statusCode == 200 else { throw APIError.httpError(http.statusCode) }
             
+            let rawStr = String(data: data.prefix(500), encoding: .utf8) ?? ""
+            print("[PanCloud] wxlist response: \(rawStr)")
+            
             let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
             let errno = json?["errno"] as? Int ?? -1
             
-            if errno == 0, let list = json?["data"] as? [[String: Any]] {
-                let jsonData = try JSONSerialization.data(withJSONObject: list)
-                return try JSONDecoder().decode([PanFile].self, from: jsonData)
-            } else {
-                throw APIError.parseFailed("errno=\(errno)")
+            guard errno == 0 else {
+                throw APIError.parseFailed("errno=\(errno), raw=\(rawStr)")
             }
+            
+            var fileList: [[String: Any]]? = nil
+            if let dataObj = json?["data"] as? [String: Any] {
+                fileList = dataObj["list"] as? [[String: Any]]
+            }
+            if fileList == nil {
+                fileList = json?["list"] as? [[String: Any]]
+            }
+            
+            guard let list = fileList else {
+                throw APIError.parseFailed("找不到文件列表, raw=\(rawStr)")
+            }
+            
+            let jsonData = try JSONSerialization.data(withJSONObject: list)
+            return try JSONDecoder().decode([PanFile].self, from: jsonData)
         } catch let err as APIError {
             throw err
         } catch {
