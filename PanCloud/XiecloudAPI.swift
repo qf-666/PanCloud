@@ -80,5 +80,3 @@ class XiecloudAPI {
         return nil
     }
 }
-
-</content>
