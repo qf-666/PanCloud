@@ -11,8 +11,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-- name: Select Xcode
+      - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode_16.app
+
+      - name: List Schemes
+        run: xcodebuild -project PanCloud.xcodeproj -list
 
       - name: Build Archive
         run: |
@@ -23,12 +26,13 @@ jobs:
             -archivePath build/PanCloud.xcarchive \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_ALLOWED=NO \
+            -destination "generic/platform=iOS"
 
       - name: Export IPA
         run: |
-          mkdir -p build/ipa
-          cp -R build/PanCloud.xcarchive/Products/Applications/PanCloud.app build/ipa/Payload
+          mkdir -p build/ipa/Payload
+          cp -R build/PanCloud.xcarchive/Products/Applications/PanCloud.app build/ipa/Payload/
           cd build/ipa
           zip -r PanCloud.ipa Payload
 
