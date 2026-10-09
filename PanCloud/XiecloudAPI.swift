@@ -43,8 +43,30 @@ class XiecloudAPI {
     
     func parse(url: String, pwd: String = "") async throws -> XieParseResult {
         let req = makeRequest(path: "/api/parse", body: ["url": url, "pwd": pwd])
-        let (data, _) = try await session.data(for: req)
-        return try JSONDecoder().decode(XieParseResult.self, from: data)
+        let decoder = JSONDecoder()
+        // Retry up to 5 times for 503 or partial responses
+        for attempt in 0..<5 {
+            let (data, response) = try await session.data(for: req)
+            if let http = response as? HTTPURLResponse, http.statusCode == 503 {
+                print("[PanCloud] xiecloud 503, retry \(attempt+1)")
+                try await Task.sleep(nanoseconds: 2_000_000_000)
+                continue
+            }
+            let result = try decoder.decode(XieParseResult.self, from: data)
+            if result.ok == false, let err = result.error {
+                print("[PanCloud] xiecloud error: \(err), retry \(attempt+1)")
+                try await Task.sleep(nanoseconds: 2_000_000_000)
+                continue
+            }
+            // If partial and not done, wait and poll again
+            if result.partial == true, result.done == false {
+                print("[PanCloud] xiecloud partial, pending=\(result.pending ?? -1), retry \(attempt+1)")
+                try await Task.sleep(nanoseconds: 3_000_000_000)
+                continue
+            }
+            return result
+        }
+        throw APIError.parseFailed("协云解析超时，请稍后重试")
     }
     
     func download(surl: String, shareid: String, uk: String, items: [[String: Any]], pwd: String = "") async throws -> String {
