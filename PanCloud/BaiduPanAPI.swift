@@ -35,8 +35,8 @@ struct PanFile: Identifiable, Codable {
         } else {
             self.fsId = try c.decode(UInt64.self, forKey: .fsId)
         }
-        self.serverFilename = try c.decode(String.self, forKey: .serverFilename)
-        self.path = try c.decode(String.self, forKey: .path)
+        self.serverFilename = (try? c.decode(String.self, forKey: .serverFilename)) ?? ""
+        self.path = (try? c.decode(String.self, forKey: .path)) ?? ""
         if let dirStr = try? c.decode(String.self, forKey: .isDir) {
             self.isDir = Int(dirStr) ?? 0
         } else {
