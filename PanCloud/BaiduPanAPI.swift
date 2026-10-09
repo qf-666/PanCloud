@@ -1,7 +1,7 @@
 import Foundation
 
 struct PanFile: Identifiable, Codable {
-    let id: String
+    var id: String { String(fsId) }
     let fsId: UInt64
     let serverFilename: String
     let path: String
@@ -10,7 +10,6 @@ struct PanFile: Identifiable, Codable {
     let dlink: String?
     
     enum CodingKeys: String, CodingKey {
-        case id = "fs_id"
         case fsId = "fs_id"
         case serverFilename = "server_filename"
         case path
