@@ -43,5 +43,3 @@ jobs:
           name: PanCloud-TrollStore-IPA
           path: build/ipa/PanCloud.ipa
           retention-days: 30
-
-</content>
