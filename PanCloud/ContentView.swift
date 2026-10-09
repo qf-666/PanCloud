@@ -157,7 +157,8 @@ struct ContentView: View {
         message = ""
         Task {
             do {
-                let result = try await BaiduPanAPI.shared.listFiles(shareURL: shareLink, pwd: pwd, cookie: settings.cookieString)
+                guard let info = BaiduPanAPI.shared.parseShareLink(shareLink) else { await MainActor.run { self.isLoading = false; self.message = "❌ 无法解析分享链接" }; return }
+                let result = try await BaiduPanAPI.shared.listFiles(info: info, cookie: settings.cookieString)
                 await MainActor.run {
                     self.files = result
                     self.isLoading = false
