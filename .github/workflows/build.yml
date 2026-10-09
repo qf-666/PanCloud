@@ -7,39 +7,40 @@ on:
 
 jobs:
   build:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 
-      - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_16.app
+      - name: Show Xcode version
+        run: xcodebuild -version
 
-      - name: List Schemes
-        run: xcodebuild -project PanCloud.xcodeproj -list
-
-      - name: Build Archive
+      - name: Build unsigned archive
         run: |
           xcodebuild archive \
             -project PanCloud.xcodeproj \
             -scheme PanCloud \
             -configuration Release \
-            -archivePath build/PanCloud.xcarchive \
+            -archivePath "$GITHUB_WORKSPACE/build/PanCloud.xcarchive" \
+            -destination "generic/platform=iOS" \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
-            -destination "generic/platform=iOS"
+            SWIFT_VERSION=5.0 \
+            2>&1 | tail -100
 
-      - name: Export IPA
+      - name: Package IPA for TrollStore
         run: |
-          mkdir -p build/ipa/Payload
-          cp -R build/PanCloud.xcarchive/Products/Applications/PanCloud.app build/ipa/Payload/
-          cd build/ipa
+          mkdir -p "$GITHUB_WORKSPACE/build/ipa/Payload"
+          cp -R "$GITHUB_WORKSPACE/build/PanCloud.xcarchive/Products/Applications/PanCloud.app" \
+                "$GITHUB_WORKSPACE/build/ipa/Payload/"
+          cd "$GITHUB_WORKSPACE/build/ipa"
           zip -r PanCloud.ipa Payload
+          ls -lh PanCloud.ipa
 
-      - name: Upload IPA Artifact
+      - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: PanCloud-IPA
+          name: PanCloud-TrollStore-IPA
           path: build/ipa/PanCloud.ipa
           retention-days: 30
 
