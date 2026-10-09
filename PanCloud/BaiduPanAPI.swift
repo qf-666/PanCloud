@@ -20,9 +20,7 @@ struct PanFile: Identifiable, Codable {
     
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        let rawId = try c.decode(Int64.self, forKey: .id)
-        self.id = String(rawId)
-        self.fsId = UInt64(bitPattern: rawId)
+        self.fsId = try c.decode(UInt64.self, forKey: .fsId)
         self.serverFilename = try c.decode(String.self, forKey: .serverFilename)
         self.path = try c.decode(String.self, forKey: .path)
         self.isDir = try c.decode(Int.self, forKey: .isDir)
