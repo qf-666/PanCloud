@@ -86,23 +86,21 @@ struct XieFileItem: Identifiable, Codable {
         }
         server_filename = (try? c.decode(String.self, forKey: .server_filename)) ?? ""
         // isdir 兼容 int / bool / string；解不出时回退到路径启发式判断
+        var dirFlag: Int = -1
         if let i = try? c.decode(Int.self, forKey: .isdir) {
-            isdir = (i == 1) ? 1 : 0
+            dirFlag = (i == 1) ? 1 : 0
         } else if let b = try? c.decode(Bool.self, forKey: .isdir) {
-            isdir = b ? 1 : 0
+            dirFlag = b ? 1 : 0
         } else if let s = try? c.decode(String.self, forKey: .isdir) {
-            if let iv = Int(s) { isdir = (iv == 1) ? 1 : 0 }
-            else if let bv = Bool(s.lowercased()) { isdir = bv ? 1 : 0 }
-            else { isdir = -1 }
-        } else {
-            isdir = -1   // -1 = 未知
+            if let iv = Int(s) { dirFlag = (iv == 1) ? 1 : 0 }
+            else if let bv = Bool(s.lowercased()) { dirFlag = bv ? 1 : 0 }
         }
-        // 未知时用文件名/路径启发式修正
-        if isdir == -1 {
+        if dirFlag == -1 {
             let n = (try? c.decodeIfPresent(String.self, forKey: .server_filename)) ?? ""
             let p = (try? c.decodeIfPresent(String.self, forKey: .path)) ?? ""
-            if n.isEmpty || p.hasSuffix("/") || !n.contains(".") { isdir = 1 } else { isdir = 0 }
+            dirFlag = (n.isEmpty || p.hasSuffix("/") || !n.contains(".")) ? 1 : 0
         }
+        isdir = dirFlag
         if let i = try? c.decode(Int64.self, forKey: .size) {
             size = i
         } else if let s = try? c.decode(String.self, forKey: .size) {

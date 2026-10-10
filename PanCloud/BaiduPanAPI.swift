@@ -42,17 +42,20 @@ struct PanFile: Identifiable, Codable {
         self.serverFilename = (try? c.decode(String.self, forKey: .serverFilename)) ?? ""
         self.path = (try? c.decode(String.self, forKey: .path)) ?? ""
         // isdir 兼容 string / int / bool
+        var dirFlag: Int = -1
         if let dirStr = try? c.decode(String.self, forKey: .isDir) {
-            self.isDir = (Int(dirStr) == 1) ? 1 : 0
+            dirFlag = (Int(dirStr) == 1) ? 1 : 0
         } else if let iv = try? c.decode(Int.self, forKey: .isDir) {
-            self.isDir = (iv == 1) ? 1 : 0
+            dirFlag = (iv == 1) ? 1 : 0
         } else if let bv = try? c.decode(Bool.self, forKey: .isDir) {
-            self.isDir = bv ? 1 : 0
-        } else {
+            dirFlag = bv ? 1 : 0
+        }
+        if dirFlag == -1 {
             // 兜底：无扩展名视为目录
             let n = (try? c.decodeIfPresent(String.self, forKey: .serverFilename)) ?? ""
-            self.isDir = (!n.isEmpty && !n.contains(".")) ? 1 : 0
+            dirFlag = (!n.isEmpty && !n.contains(".")) ? 1 : 0
         }
+        self.isDir = dirFlag
         if let sizeStr = try? c.decode(String.self, forKey: .size) {
             self.size = Int64(sizeStr) ?? 0
         } else {
