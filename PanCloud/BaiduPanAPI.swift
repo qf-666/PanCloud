@@ -31,31 +31,17 @@ struct PanFile: Identifiable, Codable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         // Baidu returns fs_id/isdir/size as strings, not numbers
         if let fsStr = try? c.decode(String.self, forKey: .fsId) {
-            self.fsId = UInt64(fsStr) ?? UInt64(abs(fsStr.hashValue))
-        } else if let num = try? c.decode(UInt64.self, forKey: .fsId) {
-            self.fsId = num
-        } else if let num = try? c.decode(Int64.self, forKey: .fsId) {
-            self.fsId = UInt64(abs(num))
+            self.fsId = UInt64(fsStr) ?? 0
         } else {
-            self.fsId = UInt64(abs(UUID().uuidString.hashValue))
+            self.fsId = try c.decode(UInt64.self, forKey: .fsId)
         }
         self.serverFilename = (try? c.decode(String.self, forKey: .serverFilename)) ?? ""
         self.path = (try? c.decode(String.self, forKey: .path)) ?? ""
-        // isdir 兼容 string / int / bool
-        var dirFlag: Int = -1
         if let dirStr = try? c.decode(String.self, forKey: .isDir) {
-            dirFlag = (Int(dirStr) == 1) ? 1 : 0
-        } else if let iv = try? c.decode(Int.self, forKey: .isDir) {
-            dirFlag = (iv == 1) ? 1 : 0
-        } else if let bv = try? c.decode(Bool.self, forKey: .isDir) {
-            dirFlag = bv ? 1 : 0
+            self.isDir = Int(dirStr) ?? 0
+        } else {
+            self.isDir = try c.decode(Int.self, forKey: .isDir)
         }
-        if dirFlag == -1 {
-            // 兜底：无扩展名视为目录
-            let n = (try? c.decodeIfPresent(String.self, forKey: .serverFilename)) ?? ""
-            dirFlag = (!n.isEmpty && !n.contains(".")) ? 1 : 0
-        }
-        self.isDir = dirFlag
         if let sizeStr = try? c.decode(String.self, forKey: .size) {
             self.size = Int64(sizeStr) ?? 0
         } else {
@@ -91,6 +77,7 @@ enum APIError: Error, LocalizedError {
 class BaiduPanAPI {
     static let shared = BaiduPanAPI()
     private let session: URLSession
+    private static let UA_WEB = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     
     init() {
         let config = URLSessionConfiguration.default
@@ -137,26 +124,15 @@ class BaiduPanAPI {
                 }
             }
         }
-        // 4. 正则兜底：只认带"提取码/密码/pwd/code"等前缀上下文的4位码，避免误判年份/路径数字
+        // 4. 正则兜底：找独立的4位字母数字串
         if pwd.isEmpty {
             let nsStr = link as NSString
-            let patterns = [
-                "(?:提取码|密\\s*码|访问码|密码|pwd|passcode|code)[\\s:：=]{0,3}([a-zA-Z0-9]{4})(?![a-zA-Z0-9])",
-                "(?:^|[\\s:：=])([a-zA-Z0-9]{4})(?=\\s*$)"
-            ]
-            for pattern in patterns {
-                if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) {
-                    let matches = regex.matches(in: link, options: [], range: NSRange(location: 0, length: nsStr.length))
-                    if let lastMatch = matches.last {
-                        let codeRange = lastMatch.range(at: 1)
-                        if codeRange.location != NSNotFound {
-                            let candidate = nsStr.substring(with: codeRange)
-                            // 排除纯数字且像年份（19xx/20xx）的候选
-                            if !(candidate.count == 4 && candidate.allSatisfy({ $0.isNumber }) && (candidate.hasPrefix("19") || candidate.hasPrefix("20"))) {
-                                pwd = candidate
-                                break
-                            }
-                        }
+            if let regex = try? NSRegularExpression(pattern: "(?:^|\\s|[:：=])([a-zA-Z0-9]{4})(?:\\s|$|[^a-zA-Z0-9])", options: []) {
+                let matches = regex.matches(in: link, options: [], range: NSRange(location: 0, length: nsStr.length))
+                if let lastMatch = matches.last {
+                    let codeRange = lastMatch.range(at: 1)
+                    if codeRange.location != NSNotFound {
+                        pwd = nsStr.substring(with: codeRange)
                     }
                 }
             }
@@ -227,44 +203,106 @@ class BaiduPanAPI {
         }
     }
     
-    /// 重新获取文件直链（dlink 过期时使用）
-    func refreshDlink(info: ShareInfo, cookie: String, dir: String, fileName: String) async throws -> String? {
-        let files = try await listFiles(info: info, cookie: cookie, dir: dir)
-        return files.first(where: { $0.serverFilename == fileName && $0.isDir != 1 })?.dlink
+    /// RC4 — 百度 sign2 下发的 JS 本质就是 RC4(key=sign3, data=sign1)
+    private func rc4(key: String, data: String) -> Data {
+        let k = Array(key.utf8)
+        var s = Array(0...255)
+        var j = 0
+        for i in 0...255 {
+            j = (j + s[i] + k[i % k.count]) % 256
+            s.swapAt(i, j)
+        }
+        var out = Data()
+        var i = 0, jj = 0
+        for byte in data.utf8 {
+            i = (i + 1) % 256
+            jj = (jj + s[i]) % 256
+            s.swapAt(i, jj)
+            let k = s[(s[i] + s[jj]) % 256]
+            out.append(byte ^ k)
+        }
+        return out
     }
 
-    func downloadFile(url: URL, cookie: String, to dest: URL) async throws {
-        // 重名时先移除旧文件，避免 moveItem 报错
-        if FileManager.default.fileExists(atPath: dest.path) {
-            try? FileManager.default.removeItem(at: dest)
+    /// 实时取 bdstoken
+    func bdstoken(cookie: String) async throws -> String {
+        let comps = URLComponents(string: "https://pan.baidu.com/api/gettemplatevariable")!
+        comps.queryItems = [
+            URLQueryItem(name: "clienttype", value: "0"),
+            URLQueryItem(name: "app_id", value: "250528"),
+            URLQueryItem(name: "web", value: "1"),
+            URLQueryItem(name: "fields", value: #"\["bdstoken\]"#)
+        ]
+        var req = URLRequest(url: comps.url!)
+        req.setValue(UA_WEB, forHTTPHeaderField: "User-Agent")
+        req.setValue(cookie, forHTTPHeaderField: "Cookie")
+        let (data, _) = try await session.data(for: req)
+        let j = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        guard (j?["errno"] as? Int) == 0, let bdstoken = (j?["result"] as? [String: Any])?["bdstoken"] as? String else {
+            throw APIError.parseFailed("bdstoken 取失败")
         }
+        return bdstoken
+    }
 
-        // dlink 过期/失败时重试（最多3次）
-        var lastError: Error?
-        for attempt in 0..<3 {
-            do {
-                var request = URLRequest(url: url)
-                request.setValue(cookie, forHTTPHeaderField: "Cookie")
-                request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)", forHTTPHeaderField: "User-Agent")
-                request.setValue("https://pan.baidu.com/", forHTTPHeaderField: "Referer")
-
-                let (tempURL, response) = try await session.download(for: request)
-                if let http = response as? HTTPURLResponse, http.statusCode != 200 {
-                    throw APIError.httpError(http.statusCode)
-                }
-                if FileManager.default.fileExists(atPath: dest.path) {
-                    try? FileManager.default.removeItem(at: dest)
-                }
-                try FileManager.default.moveItem(at: tempURL, to: dest)
-                return
-            } catch {
-                lastError = error
-                if attempt < 2 {
-                    try? await Task.sleep(nanoseconds: 2_000_000_000) // 等2秒再试
-                }
-            }
+    /// 实时取 sign (600s 过期)
+    func sign(cookie: String) async throws -> (sign: String, timestamp: Int64) {
+        let comps = URLComponents(string: "https://pan.baidu.com/api/gettemplatevariable")!
+        comps.queryItems = [
+            URLQueryItem(name: "clienttype", value: "0"),
+            URLQueryItem(name: "app_id", value: "250528"),
+            URLQueryItem(name: "web", value: "1"),
+            URLQueryItem(name: "fields", value: #"\["sign1","sign2","sign3","timestamp\]"#)
+        ]
+        var req = URLRequest(url: comps.url!)
+        req.setValue(UA_WEB, forHTTPHeaderField: "User-Agent")
+        req.setValue(cookie, forHTTPHeaderField: "Cookie")
+        let (data, _) = try await session.data(for: req)
+        let j = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        guard (j?["errno"] as? Int) == 0, let r = j?["result"] as? [String: Any],
+              let sign1 = r["sign1"] as? String, let sign3 = r["sign3"] as? String,
+              let timestamp = r["timestamp"] as? Int64 else {
+            throw APIError.parseFailed("sign 取失败")
         }
-        throw lastError ?? APIError.parseFailed("下载失败")
+        let signed = rc4(key: sign3, data: sign1)
+        return (signed.base64EncodedString(), timestamp)
+    }
+
+    /// 自己网盘零转存直链 (vip=2)
+    func dlinkSelf(fsIds: [String], cookie: String) async throws -> [String] {
+        let (sig, ts) = try await sign(cookie: cookie)
+        let bdstoken = try await bdstoken(cookie: cookie)
+        var comps = URLComponents(string: "https://pan.baidu.com/api/download")!
+        comps.queryItems = [
+            URLQueryItem(name: "sign", value: sig),
+            URLQueryItem(name: "timestamp", value: String(ts)),
+            URLQueryItem(name: "bdstoken", value: bdstoken),
+            URLQueryItem(name: "channel", value: "chunlei"),
+            URLQueryItem(name: "web", value: "1"),
+            URLQueryItem(name: "app_id", value: "250528"),
+            URLQueryItem(name: "clienttype", value: "0"),
+            URLQueryItem(name: "type", value: "dlink")
+        ]
+        var req = URLRequest(url: comps.url!)
+        req.httpMethod = "POST"
+        req.setValue(UA_WEB, forHTTPHeaderField: "User-Agent")
+        req.setValue(cookie, forHTTPHeaderField: "Cookie")
+        req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        let fidlist = fsIds.map { "\"\($0)\"" }.joined(separator: ",")
+        let body = "fidlist=[\(fidlist)]&type=dlink&vip=2"
+        req.httpBody = body.data(using: .utf8)
+        let (data, _) = try await session.data(for: req)
+        let j = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        guard (j?["errno"] as? Int) == 0, let dlinks = j?["dlink"] as? [[String: Any]] else {
+            throw APIError.parseFailed("dlink 解析失败: \(j ?? [:])")
+        }
+        return dlinks.compactMap { $0["dlink"] as? String }
+    }
+        var request = URLRequest(url: url)
+        request.setValue(cookie, forHTTPHeaderField: "Cookie")
+        request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)", forHTTPHeaderField: "User-Agent")
+        
+        let (tempURL, _) = try await session.download(for: request)
+        try FileManager.default.moveItem(at: tempURL, to: dest)
     }
 }
 
