@@ -261,7 +261,7 @@ class XiecloudAPI {
 
             // If we got surl/shareid/uk but not done yet, still wait
             if result.ok == true, result.surl != nil {
-                lastError = "解析中... (\(result.detail ?? "pending=\(result.pending ?? 0)"))"
+                lastError = "解析中... (\("pending=\(result.pending ?? 0)"))"
             }
 
             try await Task.sleep(nanoseconds: 1_500_000_000)
