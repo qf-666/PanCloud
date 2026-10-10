@@ -1,7 +1,7 @@
 import Foundation
 
 // MARK: - /api/parse response (new schema with files array)
-struct XieParseResult: Codable {
+struct XieParseResult: Decodable {
     let surl: String?
     let bare: String?
     let shareid: String?
@@ -133,7 +133,7 @@ struct XieFileItem: Identifiable, Decodable {
 }
 
 // MARK: - /api/download response
-struct XieDownloadResult: Codable {
+struct XieDownloadResult: Decodable {
     let ok: Bool?
     let id: String?          // new: was "jobId" before
     let stage: String?
@@ -142,7 +142,7 @@ struct XieDownloadResult: Codable {
 }
 
 // MARK: - /api/job response
-struct XieJobResult: Codable {
+struct XieJobResult: Decodable {
     let ok: Bool?
     let id: String?
     let stage: String?       // "prepare" | "downloading" | "done"
@@ -153,14 +153,14 @@ struct XieJobResult: Codable {
     let error: String?
 }
 
-struct XieJobLink: Codable {
+struct XieJobLink: Decodable {
     let name: String?
     let size: Int64?
     let md5: String?
 }
 
 // MARK: - /api/dl-token response
-struct XieDlTokenResult: Codable {
+struct XieDlTokenResult: Decodable {
     let ok: Bool?
     let url: String?         // relative path like "/dl/xxxxx"
     let name: String?
