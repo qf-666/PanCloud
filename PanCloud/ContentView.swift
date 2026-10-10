@@ -43,6 +43,14 @@ struct ContentView: View {
         .pickerStyle(.segmented)
     }
 
+    // MARK: - Auto-extract password when link changes
+    private func autoExtractPwd(from text: String) {
+        let extracted = XiecloudAPI.extractPassword(from: text)
+        if !extracted.isEmpty && pwd.isEmpty {
+            pwd = extracted
+        }
+    }
+
     private var directView: some View {
         VStack(spacing: 12) {
             TextField("粘贴完整 Cookie（含 BDUSS）", text: $settings.cookieString, axis: .vertical)
@@ -55,6 +63,9 @@ struct ContentView: View {
                 TextField("分享链接", text: $shareLink)
                     .textFieldStyle(.roundedBorder)
                     .autocorrectionDisabled()
+                    .onChange(of: shareLink) { newValue in
+                        autoExtractPwd(from: newValue)
+                    }
                 TextField("提取码", text: $pwd)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 80)
@@ -83,9 +94,12 @@ struct ContentView: View {
                 .multilineTextAlignment(.center)
 
             HStack {
-                TextField("分享链接", text: $shareLink)
+                TextField("粘贴分享链接或完整文本", text: $shareLink)
                     .textFieldStyle(.roundedBorder)
                     .autocorrectionDisabled()
+                    .onChange(of: shareLink) { newValue in
+                        autoExtractPwd(from: newValue)
+                    }
                 TextField("提取码", text: $pwd)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 80)
@@ -218,7 +232,6 @@ struct ContentView: View {
                     await MainActor.run { self.isLoading = false; self.message = "❌ 无法解析分享链接" }
                     return
                 }
-                // 输入框里的提取码优先
                 if !pwd.isEmpty { info = ShareInfo(surl: info.surl, shareId: info.shareId, uk: info.uk, pwd: pwd) }
                 let result = try await BaiduPanAPI.shared.listFiles(info: info, cookie: settings.cookieString, dir: "/")
                 await MainActor.run {
@@ -271,7 +284,7 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - 协云模式
+    // MARK: - 协云模式 (new flow matching web version)
 
     private func parseXieyun() {
         isLoading = true
@@ -279,12 +292,18 @@ struct ContentView: View {
         xieDir = "/"
         Task {
             do {
+                // parseAndGetContext now polls /api/parse until done=true
+                // and returns files directly from the response
                 let (context, list) = try await XiecloudAPI.shared.parseAndGetContext(url: shareLink, pwd: pwd)
                 await MainActor.run {
                     self.xieContext = context
                     self.xieFiles = list
                     self.isLoading = false
-                    self.message = "✅ 协云解析到 \(list.count) 个文件"
+                    if list.isEmpty {
+                        self.message = "⚠️ 解析成功但未找到文件"
+                    } else {
+                        self.message = "✅ 协云解析到 \(list.count) 个文件"
+                    }
                 }
             } catch {
                 await MainActor.run {
@@ -300,7 +319,14 @@ struct ContentView: View {
         isLoading = true
         Task {
             do {
-                let list = try await XiecloudAPI.shared.listFiles(surl: context.surl, shareid: context.shareid, uk: context.uk, pwd: context.pwd, dir: path)
+                let list = try await XiecloudAPI.shared.listFiles(
+                    surl: context.surl,
+                    shareid: context.shareid,
+                    uk: context.uk,
+                    pwd: context.pwd,
+                    dir: path,
+                    bare: context.bare
+                )
                 await MainActor.run {
                     self.xieDir = path
                     self.xieFiles = list
@@ -322,6 +348,7 @@ struct ContentView: View {
         message = "⬇️ 正在下载 \(file.server_filename)..."
         Task {
             do {
+                // New flow: submitDownload → pollJob → getDlToken → URLSession download
                 let url = try await XiecloudAPI.shared.downloadFile(context: context, file: file)
                 let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
                 let dest = docs.appendingPathComponent(file.server_filename)
