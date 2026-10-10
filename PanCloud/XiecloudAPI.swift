@@ -70,6 +70,7 @@ struct XieFileItem: Identifiable, Codable {
 
     enum CodingKeys: String, CodingKey {
         case fs_id, server_filename, isdir, size, path, md5
+        case name   // 协云实际返回 name 而非 server_filename
     }
 
     init(from decoder: Decoder) throws {
@@ -84,7 +85,15 @@ struct XieFileItem: Identifiable, Codable {
             // 解码失败：生成稳定唯一 ID，避免多条撞成空串导致 List 错乱
             fs_id = "unknown_\(UUID().uuidString)"
         }
-        server_filename = (try? c.decode(String.self, forKey: .server_filename)) ?? ""
+        // 文件名：百度系 server_filename，协云系 name，两者都试；最后从 path 取尾段兜底
+        if let n = try? c.decode(String.self, forKey: .server_filename), !n.isEmpty {
+            server_filename = n
+        } else if let n = ((try? c.decode(String.self, forKey: .name)) ?? nil), !n.isEmpty {
+            server_filename = n
+        } else {
+            let p = ((try? c.decode(String.self, forKey: .path)) ?? nil) ?? ""
+            server_filename = p.split(separator: "/").last.map(String.init) ?? ""
+        }
         // isdir 兼容 int / bool / string；解不出时回退到路径启发式判断
         var dirFlag: Int = -1
         if let i = try? c.decode(Int.self, forKey: .isdir) {
@@ -96,9 +105,10 @@ struct XieFileItem: Identifiable, Codable {
             else if let bv = Bool(s.lowercased()) { dirFlag = bv ? 1 : 0 }
         }
         if dirFlag == -1 {
-            let n = (try? c.decodeIfPresent(String.self, forKey: .server_filename)) ?? ""
             let p = (try? c.decodeIfPresent(String.self, forKey: .path)) ?? ""
-            dirFlag = (n.isEmpty || p.hasSuffix("/") || !n.contains(".")) ? 1 : 0
+            let n = server_filename   // 用已含 name/path 兜底的文件名
+            // 空文件名视为数据缺失（当文件），只有明确"无扩展名"或 path 以 / 结尾才判目录
+            dirFlag = (p.hasSuffix("/") || (!n.isEmpty && !n.contains("."))) ? 1 : 0
         }
         isdir = dirFlag
         if let i = try? c.decode(Int64.self, forKey: .size) {
@@ -309,17 +319,30 @@ class XiecloudAPI {
             if result.done == true || (result.ok == true && result.files != nil) {
                 return result.files ?? []
             }
-            // If not done, poll a few more times
+            // 服务器明确失败（ok:false，如 500"服务暂时不可用"）→ 立即抛错，绝不静默轮询
+            if result.ok == false {
+                let msg = result.error ?? "服务暂时不可用"
+                throw XieError.parseFailed("目录访问失败: \(msg)")
+            }
+            // 仅"未完成"才轮询，且每轮先查明确失败
             for _ in 0..<10 {
                 try await Task.sleep(nanoseconds: 1_500_000_000)
                 let retryData = try await perform(req)
-                if let retryResult = try? JSONDecoder().decode(XieParseResult.self, from: retryData),
-                   retryResult.done == true || (retryResult.ok == true && retryResult.files != nil) {
-                    return retryResult.files ?? []
+                if let retryResult = try? JSONDecoder().decode(XieParseResult.self, from: retryData) {
+                    if retryResult.done == true || (retryResult.ok == true && retryResult.files != nil) {
+                        return retryResult.files ?? []
+                    }
+                    if retryResult.ok == false {
+                        let msg = retryResult.error ?? "服务暂时不可用"
+                        throw XieError.parseFailed("目录访问失败: \(msg)")
+                    }
                 }
             }
+            return []
         }
-        return []
+        // 响应体不是可识别 JSON → 立即抛错
+        let raw = String(data: data.prefix(200), encoding: .utf8) ?? ""
+        throw XieError.parseFailed("协云目录接口返回异常: \(raw)")
     }
 
     // MARK: - Step 3: Submit download job

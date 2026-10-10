@@ -83,6 +83,20 @@ class BaiduTransferAPI {
         (j["errno"] as? Int) ?? (j["errno"] as? String).flatMap { Int($0) } ?? 0
     }
 
+    /// 百度 errno 的常见人话翻译
+    private func shareErrnoText(_ e: Int) -> String {
+        switch e {
+        case -3: return "分享已失效：文件已被删除（来晚啦），转存通道不可用"
+        case -9: return "提取码错误"
+        case 105: return "链接地址错误"
+        case 111: return "需要提取码（请填入提取码后重试）"
+        case 116: return "分享内容因违规被屏蔽"
+        case 120: return "分享内容因违规被屏蔽"
+        case -7: return "分享名称或路径非法"
+        default: return "百度网盘错误 \(e)"
+        }
+    }
+
     // MARK: - 1. bdstoken
 
     /// 从分享页 / API 拿 bdstoken（转存必须）
@@ -136,7 +150,10 @@ class BaiduTransferAPI {
                               cookie: cookie)
         let j = try await send(req)
         let e = errno(j)
-        if e != 0 { throw BTError.pan(e, (j["err_msg"] as? String) ?? "获取分享信息失败") }
+        if e != 0 {
+            let msg = (j["show_msg"] as? String) ?? (j["err_msg"] as? String) ?? shareErrnoText(e)
+            throw BTError.pan(e, msg)
+        }
         let shareid = "\(j["shareid"] ?? "")"
         let uk = "\(j["uk"] ?? "")"
         var fsids: [String] = []
@@ -191,7 +208,7 @@ class BaiduTransferAPI {
         let j = try await send(req)
         let e = errno(j)
         if e != 0 {
-            throw BTError.pan(e, (j["err_msg"] as? String) ?? (j["show_msg"] as? String) ?? "转存失败")
+            throw BTError.pan(e, (j["err_msg"] as? String) ?? (j["show_msg"] as? String) ?? shareErrnoText(e))
         }
         // 转存结果里返回 extra.list[].to
         var paths: [String] = []
