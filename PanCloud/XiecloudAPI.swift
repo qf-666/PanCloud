@@ -523,7 +523,7 @@ class XiecloudAPI {
             let u = try await getDlToken(
                 jobId: jobId,
                 name: f.server_filename,
-                md5: f.md5,
+                md5: nil,   // 实测：服务端 job 里的 md5 为空，传 parse 的混淆 md5 会报"非法文件标识"
                 bare: context.bare
             )
             urls.append(u)
@@ -557,7 +557,7 @@ class XiecloudAPI {
         let dlUrl = try await getDlToken(
             jobId: jobId,
             name: file.server_filename,
-            md5: file.md5,
+            md5: nil,   // 同 downloadFiles：不传混淆 md5
             bare: context.bare
         )
 

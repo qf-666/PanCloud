@@ -467,11 +467,14 @@ struct ContentView: View {
 
     private func downloadXieyun(_ file: XieFileItem) {
         guard let context = xieContext else { message = "❌ 请先解析分享链接"; return }
-        dl.enqueue(
+        // 协云 /dl/ 需带 x-access-token（实测 403 "下载票据无效"）；支持 Range → 分片多线程
+        dl.enqueueSegmented(
             key: file.fs_id, fileName: file.server_filename,
+            headers: ["x-access-token": XiecloudAPI.shared.accessToken,
+                      "User-Agent": "Mozilla/5.0"],
             provider: { try await XiecloudAPI.shared.downloadFile(context: context, file: file) }
         )
-        message = "⬇️ 已加入下载队列：\(file.server_filename)"
+        message = "⬇️ 已加入下载队列（协云·多线程）：\(file.server_filename)"
     }
 
     /// 批量：选中项 > 全部文件
@@ -529,12 +532,14 @@ struct ContentView: View {
                 ? xieFiles.filter { $0.isdir != 1 }
                 : xieFiles.filter { $0.isdir != 1 && selection.contains($0.fs_id) }
             for f in targets {
-                dl.enqueue(
+                dl.enqueueSegmented(
                     key: f.fs_id, fileName: f.server_filename,
+                    headers: ["x-access-token": XiecloudAPI.shared.accessToken,
+                              "User-Agent": "Mozilla/5.0"],
                     provider: { try await XiecloudAPI.shared.downloadFile(context: context, file: f) }
                 )
             }
-            message = "⬇️ 已加入 \(targets.count) 个下载任务"
+            message = "⬇️ 已加入 \(targets.count) 个下载任务（协云·多线程）"
         }
     }
 
