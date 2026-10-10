@@ -39,7 +39,7 @@ class BaiduTransferAPI {
                          query: [String: String] = [:],
                          form: [String: String] = [:],
                          cookie: String,
-                         ua: String = UA_NETDISK) throws -> URLRequest {
+                         ua: String = BaiduTransferAPI.UA_NETDISK) throws -> URLRequest {
         var comps = URLComponents(string: urlStr)
         if !query.isEmpty {
             let existing = comps?.queryItems ?? []
@@ -90,19 +90,19 @@ class BaiduTransferAPI {
         // 方式1: /api/gettemplatevariable
         let req1 = try request("\(PAN)/api/gettemplatevariable",
                                query: ["fields": "[\"bdstoken\"]"],
-                               cookie: cookie, ua: UA_WEB)
+                               cookie: cookie, ua: Self.UA_WEB)
         if let j = try? await send(req1),
            let result = j["result"] as? [String: Any],
            let token = result["bdstoken"] as? String, !token.isEmpty {
             return token
         }
         // 方式2: 分享页 HTML 里正则
-        let req2 = try request("\(PAN)/disk/home", cookie: cookie, ua: UA_WEB)
+        let req2 = try request("\(PAN)/disk/home", cookie: cookie, ua: Self.UA_WEB)
         let (data, _) = try await session.data(for: req2)
         let html = String(data: data, encoding: .utf8) ?? ""
-        if let range = html.range(of: "bdstoken[\"']?\\s*[:=]\\s*[\"']([0-9a-f]{32})", options: .regularExpression) {
+        if let range = html.range(of: "bdstoken[\"']?\\s*[:=]\\s*[\"']([0-9a-f]{32})", options: String.CompareOptions.regularExpression) {
             let seg = String(html[range])
-            if let m = seg.range(of: "[0-9a-f]{32}", options: .regularExpression) {
+            if let m = seg.range(of: "[0-9a-f]{32}", options: String.CompareOptions.regularExpression) {
                 return String(seg[m])
             }
         }
