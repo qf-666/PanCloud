@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct ContentView: View {
     @EnvironmentObject var settings: AppSettings
@@ -9,6 +10,9 @@ struct ContentView: View {
     @State private var isLoading = false
     @State private var message = ""
     @State private var showWebView = false
+    @State private var xieContext: XiecloudAPI.XieShareContext?
+    @State private var downloadingId: String?
+    @State private var shareItem: ShareItem?
     
     var body: some View {
         NavigationStack {
@@ -22,6 +26,9 @@ struct ContentView: View {
             .navigationTitle("PanCloud")
             .fullScreenCover(isPresented: $showWebView) {
                 XieyunWebView()
+            }
+            .sheet(item: $shareItem) { item in
+                ShareSheet(items: [item.url])
             }
         }
     }
@@ -145,6 +152,17 @@ struct ContentView: View {
                                 Text(formatSize(sz)).font(.caption).foregroundColor(.secondary)
                             }
                         }
+                        Spacer()
+                        if file.isdir != 1 {
+                            if downloadingId == file.fs_id {
+                                ProgressView()
+                            } else {
+                                Button(action: { downloadXieyun(file) }) {
+                                    Image(systemName: "arrow.down.circle.fill")
+                                        .foregroundColor(.indigo)
+                                }
+                            }
+                        }
                     }
                 }
                 .listStyle(.plain)
@@ -192,8 +210,9 @@ struct ContentView: View {
         message = ""
         Task {
             do {
-                let list = try await XiecloudAPI.shared.parseAndList(url: shareLink, pwd: pwd)
+                let (context, list) = try await XiecloudAPI.shared.parseAndGetContext(url: shareLink, pwd: pwd)
                 await MainActor.run {
+                    self.xieContext = context
                     self.xieFiles = list
                     self.isLoading = false
                     self.message = "✅ 协云解析到 \(list.count) 个文件"
@@ -206,6 +225,37 @@ struct ContentView: View {
             }
         }
     }
+
+    private func downloadXieyun(_ file: XieFileItem) {
+        guard let context = xieContext else {
+            message = "❌ 请先解析分享链接"
+            return
+        }
+        downloadingId = file.fs_id
+        message = "⬇️ 正在下载 \(file.server_filename)..."
+        Task {
+            do {
+                let url = try await XiecloudAPI.shared.downloadFile(context: context, file: file)
+                let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                let dest = docs.appendingPathComponent(file.server_filename)
+                let (tempURL, _) = try await URLSession.shared.download(from: url)
+                if FileManager.default.fileExists(atPath: dest.path) {
+                    try? FileManager.default.removeItem(at: dest)
+                }
+                try FileManager.default.moveItem(at: tempURL, to: dest)
+                await MainActor.run {
+                    self.downloadingId = nil
+                    self.message = "✅ 已保存: \(file.server_filename)"
+                    self.shareItem = ShareItem(url: dest)
+                }
+            } catch {
+                await MainActor.run {
+                    self.downloadingId = nil
+                    self.message = "❌ 下载失败: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
     
     private func formatSize(_ bytes: Int64) -> String {
         let formatter = ByteCountFormatter()
@@ -213,5 +263,21 @@ struct ContentView: View {
         formatter.countStyle = .file
         return formatter.string(fromByteCount: bytes)
     }
+}
+
+// 供 sheet 使用的可识别包装
+struct ShareItem: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
+struct ShareSheet: UIViewControllerRepresentable {
+    let items: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 
