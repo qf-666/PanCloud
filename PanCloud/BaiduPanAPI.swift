@@ -88,21 +88,53 @@ class BaiduPanAPI {
         var surl = ""
         var pwd = ""
         
+        // 提取 surl
         if let range = link.range(of: "/s/1") {
             let after = String(link[range.upperBound...])
-            let clean = after.components(separatedBy: CharacterSet(charactersIn: "?#")).first ?? after
+            let clean = after.components(separatedBy: CharacterSet(charactersIn: "?# \n\t")).first ?? after
             surl = "1" + clean
         } else if let range = link.range(of: "surl=") {
             let after = String(link[range.upperBound...])
-            surl = after.components(separatedBy: "&").first ?? after
+            surl = after.components(separatedBy: CharacterSet(charactersIn: "&#\n\t")).first ?? after
         }
         
+        // 1. URL参数 ?pwd=xxxx
         if let range = link.range(of: "pwd=") {
             let after = String(link[range.upperBound...])
-            pwd = after.components(separatedBy: "&").first ?? after
-        } else if let range = link.range(of: "提取码"), range.upperBound < link.endIndex {
-            let after = String(link[range.upperBound...]).trimmingCharacters(in: .whitespaces)
-            pwd = String(after.prefix(4))
+            pwd = after.components(separatedBy: CharacterSet(charactersIn: "&#\n\t ")).first ?? after
+        }
+        // 2. "提取码：abcd" / "提取码: abcd" / "提取码 abcd"
+        if pwd.isEmpty {
+            for pat in ["提取码：", "提取码:", "提取码 "] {
+                if let range = link.range(of: pat), range.upperBound < link.endIndex {
+                    let after = String(link[range.upperBound...]).trimmingCharacters(in: CharacterSet(charactersIn: "：: \t\n"))
+                    let code = String(after.prefix(4))
+                    if code.count >= 3 { pwd = code; break }
+                }
+            }
+        }
+        // 3. "密码：abcd" / "密码: abcd"
+        if pwd.isEmpty {
+            for pat in ["密码：", "密码:", "密码 "] {
+                if let range = link.range(of: pat), range.upperBound < link.endIndex {
+                    let after = String(link[range.upperBound...]).trimmingCharacters(in: CharacterSet(charactersIn: "：: \t\n"))
+                    let code = String(after.prefix(4))
+                    if code.count >= 3 { pwd = code; break }
+                }
+            }
+        }
+        // 4. 正则兜底：找独立的4位字母数字串
+        if pwd.isEmpty {
+            let nsStr = link as NSString
+            if let regex = try? NSRegularExpression(pattern: "(?:^|\\s|[:：=])([a-zA-Z0-9]{4})(?:\\s|$|[^a-zA-Z0-9])", options: []) {
+                let matches = regex.matches(in: link, options: [], range: NSRange(location: 0, length: nsStr.length))
+                if let lastMatch = matches.last {
+                    let codeRange = lastMatch.range(at: 1)
+                    if codeRange.location != NSNotFound {
+                        pwd = nsStr.substring(with: codeRange)
+                    }
+                }
+            }
         }
         
         guard !surl.isEmpty else { return nil }
