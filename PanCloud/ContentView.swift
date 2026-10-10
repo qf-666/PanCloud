@@ -253,37 +253,47 @@ struct ContentView: View {
     /// 行尾：下载中显示进度，否则显示下载按钮；文件夹显示箭头
     @ViewBuilder
     private func rowTrailing(key: String, isDir: Bool, onDownload: @escaping () -> Void) -> some View {
-        if isDir {
-            Image(systemName: "chevron.right").foregroundColor(.secondary)
-        } else if let task = dl.tasks.values.first(where: { $0.key == key && ($0.state.isActive || $0.state == .paused || $0.state == .failed) }) {
-            VStack(alignment: .trailing, spacing: 3) {
-                switch task.state {
-                case .downloading, .queued:
-                    ProgressView(value: task.progress)
-                        .frame(width: 64)
-                    Text("\(Int(task.progress * 100))% \(DownloadManager.formatSpeed(task.speed))")
-                        .font(.system(size: 9)).foregroundColor(.secondary)
-                case .paused:
-                    HStack(spacing: 2) {
-                        Image(systemName: "pause.circle.fill").foregroundColor(.orange)
-                        Button { dl.resume(task.id) } label: { Image(systemName: "play.circle.fill").foregroundColor(.green) }
-                    }
-                    Text("已暂停 \(Int(task.progress * 100))%")
-                        .font(.system(size: 9)).foregroundColor(.secondary)
-                case .failed:
-                    HStack(spacing: 2) {
-                        Image(systemName: "exclamationmark.triangle.fill").foregroundColor(.red)
-                        Button { dl.retry(task.id) } label: { Image(systemName: "arrow.clockwise.circle.fill").foregroundColor(.blue) }
-                    }
-                default:
-                    EmptyView()
+        Group {
+            if isDir {
+                Image(systemName: "chevron.right").foregroundColor(.secondary)
+            } else if let task = dl.tasks.values.first(where: { $0.key == key && ($0.state.isActive || $0.state == .paused || $0.state == .failed) }) {
+                rowTrailingForTask(task)
+            } else {
+                Button(action: onDownload) {
+                    Image(systemName: "arrow.down.circle.fill").foregroundColor(.blue)
                 }
+                .buttonStyle(.plain)
             }
-        } else {
-            Button(action: onDownload) {
-                Image(systemName: "arrow.down.circle.fill").foregroundColor(.blue)
+        }
+    }
+
+    @ViewBuilder
+    private func rowTrailingForTask(_ task: DownloadTask) -> some View {
+        VStack(alignment: .trailing, spacing: 3) {
+            switch task.state {
+            case .downloading, .queued:
+                ProgressView(value: task.progress).frame(width: 64)
+                Text("\(Int(task.progress * 100))% \(DownloadManager.formatSpeed(task.speed))")
+                    .font(.system(size: 9)).foregroundColor(.secondary)
+            case .paused:
+                HStack(spacing: 2) {
+                    Image(systemName: "pause.circle.fill").foregroundColor(.orange)
+                    Button { dl.resume(task.id) } label: {
+                        Image(systemName: "play.circle.fill").foregroundColor(.green)
+                    }
+                }
+                Text("已暂停 \(Int(task.progress * 100))%")
+                    .font(.system(size: 9)).foregroundColor(.secondary)
+            case .failed:
+                HStack(spacing: 2) {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundColor(.red)
+                    Button { dl.retry(task.id) } label: {
+                        Image(systemName: "arrow.clockwise.circle.fill").foregroundColor(.blue)
+                    }
+                }
+            default:
+                EmptyView()
             }
-            .buttonStyle(.plain)
         }
     }
 
@@ -474,39 +484,7 @@ struct ContentView: View {
 
                 Section("任务") {
                     ForEach(Array(dl.tasks.values).sorted { $0.fileName < $1.fileName }) { task in
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Text(task.fileName).font(.subheadline).lineLimit(1)
-                                Spacer()
-                                Text(task.state.label)
-                                    .font(.caption2)
-                                    .foregroundColor(task.state == .paused ? .orange : (task.state == .failed ? .red : .secondary))
-                            }
-                            ProgressView(value: task.progress)
-                            HStack {
-                                Text("\(DownloadManager.formatSize(task.writtenBytes)) / \(DownloadManager.formatSize(task.totalBytes))")
-                                Spacer()
-                                Text(DownloadManager.formatSpeed(task.speed))
-                            }
-                            .font(.system(size: 10)).foregroundColor(.secondary)
-
-                            HStack(spacing: 14) {
-                                switch task.state {
-                                case .downloading:
-                                    Button { dl.pause(task.id) } label: { Label("暂停", systemImage: "pause.fill").font(.caption) }
-                                    Button(role: .destructive) { dl.cancel(task.id) } label: { Label("取消", systemImage: "xmark").font(.caption) }
-                                case .paused:
-                                    Button { dl.resume(task.id) } label: { Label("继续", systemImage: "play.fill").font(.caption) }
-                                    Button(role: .destructive) { dl.cancel(task.id) } label: { Label("取消", systemImage: "xmark").font(.caption) }
-                                case .failed:
-                                    Button { dl.retry(task.id) } label: { Label("重试", systemImage: "arrow.clockwise").font(.caption) }
-                                    Button(role: .destructive) { dl.cancel(task.id) } label: { Label("移除", systemImage: "trash").font(.caption) }
-                                default:
-                                    EmptyView()
-                                }
-                            }
-                        }
-                        .padding(.vertical, 2)
+                        taskRow(task)
                     }
                 }
 
@@ -534,6 +512,72 @@ struct ContentView: View {
                 }
             }
             .onAppear { dl.refreshFinished() }
+        }
+    }
+
+    // MARK: - 任务行（面板）
+    @ViewBuilder
+    private func taskRow(_ task: DownloadTask) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(task.fileName).font(.subheadline).lineLimit(1)
+                Spacer()
+                Text(task.state.label).font(.caption2).foregroundColor(stateColor(task.state))
+            }
+            ProgressView(value: task.progress)
+            HStack {
+                Text(sizeText(task))
+                Spacer()
+                Text(DownloadManager.formatSpeed(task.speed))
+            }
+            .font(.system(size: 10)).foregroundColor(.secondary)
+            taskActions(task)
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func stateColor(_ state: DownloadState) -> Color {
+        switch state {
+        case .paused: return .orange
+        case .failed: return .red
+        default: return .secondary
+        }
+    }
+
+    private func sizeText(_ task: DownloadTask) -> String {
+        let w = DownloadManager.formatSize(task.writtenBytes)
+        let t = DownloadManager.formatSize(task.totalBytes)
+        return "\(w) / \(t)"
+    }
+
+    @ViewBuilder
+    private func taskActions(_ task: DownloadTask) -> some View {
+        HStack(spacing: 14) {
+            switch task.state {
+            case .downloading:
+                Button { dl.pause(task.id) } label: {
+                    Label("暂停", systemImage: "pause.fill").font(.caption)
+                }
+                Button(role: .destructive) { dl.cancel(task.id) } label: {
+                    Label("取消", systemImage: "xmark").font(.caption)
+                }
+            case .paused:
+                Button { dl.resume(task.id) } label: {
+                    Label("继续", systemImage: "play.fill").font(.caption)
+                }
+                Button(role: .destructive) { dl.cancel(task.id) } label: {
+                    Label("取消", systemImage: "xmark").font(.caption)
+                }
+            case .failed:
+                Button { dl.retry(task.id) } label: {
+                    Label("重试", systemImage: "arrow.clockwise").font(.caption)
+                }
+                Button(role: .destructive) { dl.cancel(task.id) } label: {
+                    Label("移除", systemImage: "trash").font(.caption)
+                }
+            default:
+                EmptyView()
+            }
         }
     }
 }
