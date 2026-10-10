@@ -177,13 +177,17 @@ class XiecloudAPI {
     private let baseURL = "https://pan.xiecloud.cn"
     private let session: URLSession
 
-    /// Read token from Info.plist (injected by CI) or fall back to env
+    /// Read token from Info.plist (injected by CI), env, or fallback default
     var accessToken: String {
         if let plistToken = Bundle.main.object(forInfoDictionaryKey: "XieAccessToken") as? String,
            !plistToken.isEmpty {
             return plistToken
         }
-        return ProcessInfo.processInfo.environment["XIE_ACCESS_TOKEN"] ?? ""
+        if let envToken = ProcessInfo.processInfo.environment["XIE_ACCESS_TOKEN"],
+           !envToken.isEmpty {
+            return envToken
+        }
+        return "DK5C5-76M8K-T49H0-VN2D9"
     }
 
     init() {
