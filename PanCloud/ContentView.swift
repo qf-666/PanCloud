@@ -11,9 +11,12 @@ struct ContentView: View {
     @State private var message = ""
     @State private var showWebView = false
     @State private var xieContext: XiecloudAPI.XieShareContext?
+    @State private var directInfo: ShareInfo?
     @State private var downloadingId: String?
     @State private var shareItem: ShareItem?
-    
+    @State private var directDir = "/"
+    @State private var xieDir = "/"
+
     var body: some View {
         NavigationStack {
             VStack(spacing: 16) {
@@ -32,14 +35,14 @@ struct ContentView: View {
             }
         }
     }
-    
+
     private var modePicker: some View {
         Picker("下载模式", selection: $settings.mode) {
             ForEach(DownloadMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
         }
         .pickerStyle(.segmented)
     }
-    
+
     private var directView: some View {
         VStack(spacing: 12) {
             TextField("粘贴完整 Cookie（含 BDUSS）", text: $settings.cookieString, axis: .vertical)
@@ -47,7 +50,7 @@ struct ContentView: View {
                 .lineLimit(3...6)
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
-            
+
             HStack {
                 TextField("分享链接", text: $shareLink)
                     .textFieldStyle(.roundedBorder)
@@ -56,7 +59,7 @@ struct ContentView: View {
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 80)
             }
-            
+
             Button(action: parseDirect) {
                 HStack {
                     if isLoading { ProgressView().tint(.white) }
@@ -71,14 +74,14 @@ struct ContentView: View {
             .disabled(isLoading || settings.cookieString.isEmpty)
         }
     }
-    
+
     private var xieyunView: some View {
         VStack(spacing: 12) {
             Text("协云模式：直接调用 pan.xiecloud.cn API，无需填写 Cookie")
                 .font(.caption)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
-            
+
             HStack {
                 TextField("分享链接", text: $shareLink)
                     .textFieldStyle(.roundedBorder)
@@ -87,7 +90,7 @@ struct ContentView: View {
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 80)
             }
-            
+
             HStack(spacing: 12) {
                 Button(action: parseXieyun) {
                     HStack {
@@ -101,7 +104,7 @@ struct ContentView: View {
                     .cornerRadius(10)
                 }
                 .disabled(isLoading)
-                
+
                 Button("打开网页版") { showWebView = true }
                     .frame(maxWidth: .infinity)
                     .padding()
@@ -110,7 +113,7 @@ struct ContentView: View {
             }
         }
     }
-    
+
     private var fileList: some View {
         Group {
             if !message.isEmpty {
@@ -119,8 +122,9 @@ struct ContentView: View {
                     .foregroundColor(message.contains("❌") ? .red : .green)
                     .padding(.horizontal)
             }
-            
+
             if settings.mode == .direct {
+                if !files.isEmpty { breadcrumb(path: directDir) { goDirect(path: $0) } }
                 List(files) { file in
                     HStack {
                         Image(systemName: file.isDir == 1 ? "folder.fill" : "doc.fill")
@@ -132,16 +136,23 @@ struct ContentView: View {
                             }
                         }
                         Spacer()
-                        if file.isDir != 1, let dlink = file.dlink {
+                        if file.isDir == 1 {
+                            Image(systemName: "chevron.right").foregroundColor(.secondary)
+                        } else if let dlink = file.dlink {
                             Button(action: { downloadDirect(dlink: dlink, name: file.serverFilename) }) {
                                 Image(systemName: "arrow.down.circle.fill")
                                     .foregroundColor(.blue)
                             }
                         }
                     }
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        if file.isDir == 1 { goDirect(path: file.path) }
+                    }
                 }
                 .listStyle(.plain)
             } else {
+                if !xieFiles.isEmpty { breadcrumb(path: xieDir) { goXie(path: $0) } }
                 List(xieFiles) { file in
                     HStack {
                         Image(systemName: file.isdir == 1 ? "folder.fill" : "doc.fill")
@@ -153,31 +164,65 @@ struct ContentView: View {
                             }
                         }
                         Spacer()
-                        if file.isdir != 1 {
-                            if downloadingId == file.fs_id {
-                                ProgressView()
-                            } else {
-                                Button(action: { downloadXieyun(file) }) {
-                                    Image(systemName: "arrow.down.circle.fill")
-                                        .foregroundColor(.indigo)
-                                }
+                        if file.isdir == 1 {
+                            Image(systemName: "chevron.right").foregroundColor(.secondary)
+                        } else if downloadingId == file.fs_id {
+                            ProgressView()
+                        } else {
+                            Button(action: { downloadXieyun(file) }) {
+                                Image(systemName: "arrow.down.circle.fill")
+                                    .foregroundColor(.indigo)
                             }
                         }
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        if file.isdir == 1 { goXie(path: file.path ?? "/") }
                     }
                 }
                 .listStyle(.plain)
             }
         }
     }
-    
+
+    private func breadcrumb(path: String, onTap: @escaping (String) -> Void) -> some View {
+        HStack {
+            Button {
+                onTap(parentPath(path))
+            } label: {
+                Label("返回上级", systemImage: "arrow.up.left")
+                    .font(.caption)
+            }
+            .disabled(path == "/" || path.isEmpty)
+            Spacer()
+            Text(path).font(.caption2).foregroundColor(.secondary).lineLimit(1)
+        }
+        .padding(.horizontal)
+    }
+
+    private func parentPath(_ p: String) -> String {
+        var parts = p.split(separator: "/").map(String.init)
+        if !parts.isEmpty { parts.removeLast() }
+        return "/" + parts.joined(separator: "/")
+    }
+
+    // MARK: - 直连模式
+
     private func parseDirect() {
         isLoading = true
         message = ""
+        directDir = "/"
         Task {
             do {
-                guard let info = BaiduPanAPI.shared.parseShareLink(shareLink) else { await MainActor.run { self.isLoading = false; self.message = "❌ 无法解析分享链接" }; return }
-                let result = try await BaiduPanAPI.shared.listFiles(info: info, cookie: settings.cookieString)
+                guard var info = BaiduPanAPI.shared.parseShareLink(shareLink) else {
+                    await MainActor.run { self.isLoading = false; self.message = "❌ 无法解析分享链接" }
+                    return
+                }
+                // 输入框里的提取码优先
+                if !pwd.isEmpty { info = ShareInfo(surl: info.surl, shareId: info.shareId, uk: info.uk, pwd: pwd) }
+                let result = try await BaiduPanAPI.shared.listFiles(info: info, cookie: settings.cookieString, dir: "/")
                 await MainActor.run {
+                    self.directInfo = info
                     self.files = result
                     self.isLoading = false
                     self.message = "✅ 找到 \(result.count) 个文件"
@@ -190,7 +235,25 @@ struct ContentView: View {
             }
         }
     }
-    
+
+    private func goDirect(path: String) {
+        guard let info = directInfo else { return }
+        isLoading = true
+        Task {
+            do {
+                let result = try await BaiduPanAPI.shared.listFiles(info: info, cookie: settings.cookieString, dir: path)
+                await MainActor.run {
+                    self.directDir = path
+                    self.files = result
+                    self.isLoading = false
+                    self.message = "✅ \(path) 共 \(result.count) 项"
+                }
+            } catch {
+                await MainActor.run { self.isLoading = false; self.message = "❌ \(error.localizedDescription)" }
+            }
+        }
+    }
+
     private func downloadDirect(dlink: String, name: String) {
         message = "⬇️ 正在下载 \(name)..."
         Task {
@@ -198,16 +261,22 @@ struct ContentView: View {
                 let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
                 let dest = docs.appendingPathComponent(name)
                 try await BaiduPanAPI.shared.downloadFile(url: URL(string: dlink)!, cookie: settings.cookieString, to: dest)
-                await MainActor.run { self.message = "✅ 已保存: \(name)" }
+                await MainActor.run {
+                    self.message = "✅ 已保存: \(name)"
+                    self.shareItem = ShareItem(url: dest)
+                }
             } catch {
                 await MainActor.run { self.message = "❌ 下载失败: \(error.localizedDescription)" }
             }
         }
     }
-    
+
+    // MARK: - 协云模式
+
     private func parseXieyun() {
         isLoading = true
         message = ""
+        xieDir = "/"
         Task {
             do {
                 let (context, list) = try await XiecloudAPI.shared.parseAndGetContext(url: shareLink, pwd: pwd)
@@ -222,6 +291,24 @@ struct ContentView: View {
                     self.isLoading = false
                     self.message = "❌ \(error.localizedDescription)"
                 }
+            }
+        }
+    }
+
+    private func goXie(path: String) {
+        guard let context = xieContext else { return }
+        isLoading = true
+        Task {
+            do {
+                let list = try await XiecloudAPI.shared.listFiles(surl: context.surl, shareid: context.shareid, uk: context.uk, pwd: context.pwd, dir: path)
+                await MainActor.run {
+                    self.xieDir = path
+                    self.xieFiles = list
+                    self.isLoading = false
+                    self.message = "✅ \(path) 共 \(list.count) 项"
+                }
+            } catch {
+                await MainActor.run { self.isLoading = false; self.message = "❌ \(error.localizedDescription)" }
             }
         }
     }
@@ -256,7 +343,7 @@ struct ContentView: View {
             }
         }
     }
-    
+
     private func formatSize(_ bytes: Int64) -> String {
         let formatter = ByteCountFormatter()
         formatter.allowedUnits = [.useKB, .useMB, .useGB]
@@ -280,4 +367,3 @@ struct ShareSheet: UIViewControllerRepresentable {
 
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
-
