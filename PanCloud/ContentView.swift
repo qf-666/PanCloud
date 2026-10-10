@@ -273,7 +273,17 @@ struct ContentView: View {
             do {
                 let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
                 let dest = docs.appendingPathComponent(name)
-                try await BaiduPanAPI.shared.downloadFile(url: URL(string: dlink)!, cookie: settings.cookieString, to: dest)
+                do {
+                    try await BaiduPanAPI.shared.downloadFile(url: URL(string: dlink)!, cookie: settings.cookieString, to: dest)
+                } catch {
+                    // dlink 可能已过期 → 重新拉取文件列表拿新链接再试一次
+                    guard let info = directInfo,
+                          let fresh = try await BaiduPanAPI.shared.refreshDlink(
+                            info: info, cookie: settings.cookieString,
+                            dir: directDir, fileName: name),
+                          let freshURL = URL(string: fresh) else { throw error }
+                    try await BaiduPanAPI.shared.downloadFile(url: freshURL, cookie: settings.cookieString, to: dest)
+                }
                 await MainActor.run {
                     self.message = "✅ 已保存: \(name)"
                     self.shareItem = ShareItem(url: dest)

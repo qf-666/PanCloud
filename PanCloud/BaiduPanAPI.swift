@@ -123,15 +123,26 @@ class BaiduPanAPI {
                 }
             }
         }
-        // 4. 正则兜底：找独立的4位字母数字串
+        // 4. 正则兜底：只认带"提取码/密码/pwd/code"等前缀上下文的4位码，避免误判年份/路径数字
         if pwd.isEmpty {
             let nsStr = link as NSString
-            if let regex = try? NSRegularExpression(pattern: "(?:^|\\s|[:：=])([a-zA-Z0-9]{4})(?:\\s|$|[^a-zA-Z0-9])", options: []) {
-                let matches = regex.matches(in: link, options: [], range: NSRange(location: 0, length: nsStr.length))
-                if let lastMatch = matches.last {
-                    let codeRange = lastMatch.range(at: 1)
-                    if codeRange.location != NSNotFound {
-                        pwd = nsStr.substring(with: codeRange)
+            let patterns = [
+                "(?:提取码|密\\s*码|访问码|密码|pwd|passcode|code)[\\s:：=]{0,3}([a-zA-Z0-9]{4})(?![a-zA-Z0-9])",
+                "(?:^|[\\s:：=])([a-zA-Z0-9]{4})(?=\\s*$)"
+            ]
+            for pattern in patterns {
+                if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) {
+                    let matches = regex.matches(in: link, options: [], range: NSRange(location: 0, length: nsStr.length))
+                    if let lastMatch = matches.last {
+                        let codeRange = lastMatch.range(at: 1)
+                        if codeRange.location != NSNotFound {
+                            let candidate = nsStr.substring(with: codeRange)
+                            // 排除纯数字且像年份（19xx/20xx）的候选
+                            if !(candidate.count == 4 && candidate.allSatisfy({ $0.isNumber }) && (candidate.hasPrefix("19") || candidate.hasPrefix("20"))) {
+                                pwd = candidate
+                                break
+                            }
+                        }
                     }
                 }
             }
@@ -202,13 +213,43 @@ class BaiduPanAPI {
         }
     }
     
+    /// 重新获取文件直链（dlink 过期时使用）
+    func refreshDlink(info: ShareInfo, cookie: String, dir: String, fileName: String) async throws -> String? {
+        let files = try await listFiles(info: info, cookie: cookie, dir: dir)
+        return files.first(where: { $0.serverFilename == fileName && $0.isDir != 1 })?.dlink
+    }
+
     func downloadFile(url: URL, cookie: String, to dest: URL) async throws {
-        var request = URLRequest(url: url)
-        request.setValue(cookie, forHTTPHeaderField: "Cookie")
-        request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)", forHTTPHeaderField: "User-Agent")
-        
-        let (tempURL, _) = try await session.download(for: request)
-        try FileManager.default.moveItem(at: tempURL, to: dest)
+        // 重名时先移除旧文件，避免 moveItem 报错
+        if FileManager.default.fileExists(atPath: dest.path) {
+            try? FileManager.default.removeItem(at: dest)
+        }
+
+        // dlink 过期/失败时重试（最多3次）
+        var lastError: Error?
+        for attempt in 0..<3 {
+            do {
+                var request = URLRequest(url: url)
+                request.setValue(cookie, forHTTPHeaderField: "Cookie")
+                request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)", forHTTPHeaderField: "User-Agent")
+
+                let (tempURL, response) = try await session.download(for: request)
+                if let http = response as? HTTPURLResponse, http.statusCode != 200 {
+                    throw APIError.httpError(http.statusCode)
+                }
+                if FileManager.default.fileExists(atPath: dest.path) {
+                    try? FileManager.default.removeItem(at: dest)
+                }
+                try FileManager.default.moveItem(at: tempURL, to: dest)
+                return
+            } catch {
+                lastError = error
+                if attempt < 2 {
+                    try? await Task.sleep(nanoseconds: 2_000_000_000) // 等2秒再试
+                }
+            }
+        }
+        throw lastError ?? APIError.parseFailed("下载失败")
     }
 }
 
