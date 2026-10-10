@@ -59,6 +59,14 @@ final class DownloadTask: Identifiable, ObservableObject {
         return min(1.0, Double(writtenBytes) / Double(totalBytes))
     }
 
+    /// 是否需要在行尾显示下载控件（进度/暂停/重试）
+    var showsRowControl: Bool {
+        switch state {
+        case .queued, .downloading, .paused, .failed: return true
+        case .finished, .cancelled: return false
+        }
+    }
+
     init(key: String, fileName: String, dest: URL) {
         self.key = key
         self.fileName = fileName
@@ -259,6 +267,14 @@ final class DownloadManager: ObservableObject {
     }
     var pausedTasks: [DownloadTask] {
         tasks.values.filter { $0.state == .paused }.sorted { $0.fileName < $1.fileName }
+    }
+
+    /// 按 key 找到需要显示行尾控件的任务（供 UI 用，避免在 ViewBuilder 里做复杂推断）
+    func rowTask(forKey key: String) -> DownloadTask? {
+        for task in tasks.values where task.key == key {
+            if task.showsRowControl { return task }
+        }
+        return nil
     }
 
     var overallSpeed: Double { activeTasks.reduce(0) { $0 + $1.speed } }

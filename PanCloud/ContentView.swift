@@ -187,83 +187,90 @@ struct ContentView: View {
                     .font(.caption)
                     .foregroundColor(message.contains("❌") ? .red : .secondary)
             }
-
             if settings.mode == .direct {
-                if !files.isEmpty { breadcrumb(path: directDir) { goDirect(path: $0) } }
-                List(files) { file in
-                    HStack(spacing: 10) {
-                        if file.isDir != 1 {
-                            Image(systemName: selection.contains(String(file.fsId)) ? "checkmark.circle.fill" : "circle")
-                                .foregroundColor(.blue)
-                                .onTapGesture { toggle(String(file.fsId)) }
-                        }
-                        Image(systemName: file.isDir == 1 ? "folder.fill" : "doc.fill")
-                            .foregroundColor(file.isDir == 1 ? .yellow : .blue)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(file.serverFilename).font(.subheadline).lineLimit(1)
-                            if file.isDir != 1 {
-                                Text(DownloadManager.formatSize(file.size))
-                                    .font(.caption2).foregroundColor(.secondary)
-                            }
-                        }
-                        Spacer()
-                        rowTrailing(key: String(file.fsId),
-                                    isDir: file.isDir == 1,
-                                    onDownload: { downloadDirect(dlink: file.dlink, name: file.serverFilename) })
-                    }
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        if file.isDir == 1 { goDirect(path: file.path) }
-                    }
-                }
-                .listStyle(.plain)
+                directFileList
             } else {
-                if !xieFiles.isEmpty { breadcrumb(path: xieDir) { goXie(path: $0) } }
-                List(xieFiles) { file in
-                    HStack(spacing: 10) {
-                        if file.isdir != 1 {
-                            Image(systemName: selection.contains(file.fs_id) ? "checkmark.circle.fill" : "circle")
-                                .foregroundColor(.indigo)
-                                .onTapGesture { toggle(file.fs_id) }
-                        }
-                        Image(systemName: file.isdir == 1 ? "folder.fill" : "doc.fill")
-                            .foregroundColor(file.isdir == 1 ? .yellow : .indigo)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(file.server_filename).font(.subheadline).lineLimit(1)
-                            if file.isdir != 1, let sz = file.size {
-                                Text(DownloadManager.formatSize(sz))
-                                    .font(.caption2).foregroundColor(.secondary)
-                            }
-                        }
-                        Spacer()
-                        rowTrailing(key: file.fs_id,
-                                    isDir: file.isdir == 1,
-                                    onDownload: { downloadXieyun(file) })
-                    }
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        if file.isdir == 1 { goXie(path: file.path ?? "/") }
-                    }
-                }
-                .listStyle(.plain)
+                xieFileList
             }
         }
+    }
+
+    @ViewBuilder
+    private var directFileList: some View {
+        if !files.isEmpty { breadcrumb(path: directDir) { goDirect(path: $0) } }
+        List(files) { file in
+            HStack(spacing: 10) {
+                if file.isDir != 1 {
+                    Image(systemName: selection.contains(String(file.fsId)) ? "checkmark.circle.fill" : "circle")
+                        .foregroundColor(.blue)
+                        .onTapGesture { toggle(String(file.fsId)) }
+                }
+                Image(systemName: file.isDir == 1 ? "folder.fill" : "doc.fill")
+                    .foregroundColor(file.isDir == 1 ? .yellow : .blue)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(file.serverFilename).font(.subheadline).lineLimit(1)
+                    if file.isDir != 1 {
+                        Text(DownloadManager.formatSize(file.size))
+                            .font(.caption2).foregroundColor(.secondary)
+                    }
+                }
+                Spacer()
+                rowTrailing(key: String(file.fsId),
+                            isDir: file.isDir == 1,
+                            onDownload: { downloadDirect(dlink: file.dlink, name: file.serverFilename) })
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                if file.isDir == 1 { goDirect(path: file.path) }
+            }
+        }
+        .listStyle(.plain)
+    }
+
+    @ViewBuilder
+    private var xieFileList: some View {
+        if !xieFiles.isEmpty { breadcrumb(path: xieDir) { goXie(path: $0) } }
+        List(xieFiles) { file in
+            HStack(spacing: 10) {
+                if file.isdir != 1 {
+                    Image(systemName: selection.contains(file.fs_id) ? "checkmark.circle.fill" : "circle")
+                        .foregroundColor(.indigo)
+                        .onTapGesture { toggle(file.fs_id) }
+                }
+                Image(systemName: file.isdir == 1 ? "folder.fill" : "doc.fill")
+                    .foregroundColor(file.isdir == 1 ? .yellow : .indigo)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(file.server_filename).font(.subheadline).lineLimit(1)
+                    if file.isdir != 1, let sz = file.size {
+                        Text(DownloadManager.formatSize(sz))
+                            .font(.caption2).foregroundColor(.secondary)
+                    }
+                }
+                Spacer()
+                rowTrailing(key: file.fs_id,
+                            isDir: file.isdir == 1,
+                            onDownload: { downloadXieyun(file) })
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                if file.isdir == 1 { goXie(path: file.path ?? "/") }
+            }
+        }
+        .listStyle(.plain)
     }
 
     /// 行尾：下载中显示进度，否则显示下载按钮；文件夹显示箭头
     @ViewBuilder
     private func rowTrailing(key: String, isDir: Bool, onDownload: @escaping () -> Void) -> some View {
-        Group {
-            if isDir {
-                Image(systemName: "chevron.right").foregroundColor(.secondary)
-            } else if let task = dl.tasks.values.first(where: { $0.key == key && ($0.state.isActive || $0.state == .paused || $0.state == .failed) }) {
-                rowTrailingForTask(task)
-            } else {
-                Button(action: onDownload) {
-                    Image(systemName: "arrow.down.circle.fill").foregroundColor(.blue)
-                }
-                .buttonStyle(.plain)
+        if isDir {
+            Image(systemName: "chevron.right").foregroundColor(.secondary)
+        } else if let task = dl.rowTask(forKey: key) {
+            rowTrailingForTask(task)
+        } else {
+            Button(action: onDownload) {
+                Image(systemName: "arrow.down.circle.fill").foregroundColor(.blue)
             }
+            .buttonStyle(.plain)
         }
     }
 
