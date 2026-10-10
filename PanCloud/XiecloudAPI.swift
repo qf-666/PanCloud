@@ -58,7 +58,7 @@ struct XieParseResult: Codable {
 }
 
 // MARK: - File item (tolerates string OR number fields)
-struct XieFileItem: Identifiable, Codable {
+struct XieFileItem: Identifiable, Decodable {
     let fs_id: String
     let server_filename: String
     let isdir: Int
