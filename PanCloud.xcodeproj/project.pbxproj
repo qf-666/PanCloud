@@ -14,6 +14,8 @@
 		A10000000000000000000007 /* XiecloudAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000007; };
 		A10000000000000000000008 /* XieyunWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000008; };
 		A10000000000000000000009 /* DownloadManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000009; };
+		A1000000000000000000000B /* SegmentedDownloader.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000B; };
+		A1000000000000000000000A /* BaiduTransferAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000A; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -25,6 +27,8 @@
 		A20000000000000000000007 /* XiecloudAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = XiecloudAPI.swift; sourceTree = "<group>"; };
 		A20000000000000000000008 /* XieyunWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = XieyunWebView.swift; sourceTree = "<group>"; };
 		A20000000000000000000009 /* DownloadManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadManager.swift; sourceTree = "<group>"; };
+		A2000000000000000000000B /* SegmentedDownloader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SegmentedDownloader.swift; sourceTree = "<group>"; };
+		A2000000000000000000000A /* BaiduTransferAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BaiduTransferAPI.swift; sourceTree = "<group>"; };
 		A20000000000000000000010 /* PanCloud.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PanCloud.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -57,6 +61,8 @@
 				A20000000000000000000007 /* XiecloudAPI.swift */,
 				A20000000000000000000008 /* XieyunWebView.swift */,
 				A20000000000000000000009 /* DownloadManager.swift */,
+				A2000000000000000000000B /* SegmentedDownloader.swift */,
+				A2000000000000000000000A /* BaiduTransferAPI.swift */,
 				A20000000000000000000004 /* Info.plist */,
 			);
 			path = PanCloud;
@@ -145,6 +151,8 @@
 				A10000000000000000000007 /* XiecloudAPI.swift in Sources */,
 				A10000000000000000000008 /* XieyunWebView.swift in Sources */,
 				A10000000000000000000009 /* DownloadManager.swift in Sources */,
+				A1000000000000000000000B /* SegmentedDownloader.swift in Sources */,
+				A1000000000000000000000A /* BaiduTransferAPI.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -168,6 +168,10 @@ final class DownloadManager: ObservableObject {
     /// 每个任务的即时 provider（用于恢复时重新取 URL，若 resumeData 不可用）
     private var providers: [UUID: () async throws -> URL] = [:]
     private var headersMap: [UUID: [String: String]] = [:]
+    /// 多线程分片下载器（任务 id -> 下载器），用于取消
+    private var segmented: [UUID: SegmentedDownloader] = [:]
+    /// 曾以分片模式启动过的任务（pause/resume/retry 时仍走分片通道）
+    private var segmentedEver: Set<UUID> = []
 
     /// 断点数据的持久化目录
     private lazy var resumeDir: URL = {
@@ -204,9 +208,81 @@ final class DownloadManager: ObservableObject {
         return task
     }
 
+    /// 多线程 Range 分片下载（用于百度转存后的直链）。独立于后台 session 调度。
+    /// - provider 返回最终下载 URL；分片断点续传基于 .partN 文件
+    @discardableResult
+    func enqueueSegmented(
+        key: String,
+        fileName: String,
+        headers: [String: String],
+        provider: @escaping () async throws -> URL
+    ) -> DownloadTask {
+        if let existing = tasks.values.first(where: { $0.key == key && $0.state.isActive }) {
+            return existing
+        }
+        let dest = Self.safeDestination(for: fileName)
+        let task = DownloadTask(key: key, fileName: fileName, dest: dest)
+        tasks[task.id] = task
+        providers[task.id] = provider
+        headersMap[task.id] = headers
+        segmentedEver.insert(task.id)
+        runSegmented(task, headers: headers, provider: provider)
+        return task
+    }
+
+    /// 分片任务执行体（取直链 → probe → 多线程下载），pause/resume/retry 复用
+    private func runSegmented(_ task: DownloadTask,
+                              headers: [String: String],
+                              provider: @escaping () async throws -> URL) {
+        task.state = .downloading
+        Task { @MainActor in
+            var seg = SegmentedDownloader(threads: 8, headers: headers)
+            self.segmented[task.id] = seg
+            do {
+                let url = try await provider()
+                let (size, supportsRange) = try await seg.probe(url: url)
+                if !supportsRange {
+                    // 服务器忽略 Range：退化为单线程整段，避免分片错乱
+                    seg = SegmentedDownloader(threads: 1, headers: headers)
+                    self.segmented[task.id] = seg
+                }
+                task.totalBytes = size
+                try await seg.download(url: url, dest: task.dest, totalSize: size) { done, total, sp in
+                    Task { @MainActor in
+                        task.writtenBytes = done
+                        if total > 0 { task.totalBytes = total }
+                        task.speed = sp
+                    }
+                }
+                self.segmented[task.id] = nil
+                if task.state == .cancelled { return }
+                task.state = .finished(task.dest)
+                task.speed = 0
+                if !self.finishedFiles.contains(task.dest) { self.finishedFiles.insert(task.dest, at: 0) }
+            } catch {
+                self.segmented[task.id] = nil
+                if task.state == .cancelled { return }
+                if let se = error as? SegmentedDownloader.SegError, case .cancelled = se {
+                    task.state = .cancelled
+                } else {
+                    task.state = .failed(error.localizedDescription)
+                }
+                task.speed = 0
+            }
+        }
+    }
+
     /// 暂停并保存断点数据
     func pause(_ id: UUID) {
         guard let task = tasks[id], task.state == .downloading else { return }
+        if let seg = segmented[id] {
+            // 分片任务：停止下载但保留 .partN 文件，resume 时续传
+            seg.cancel()
+            segmented[id] = nil
+            task.state = .paused
+            task.speed = 0
+            return
+        }
         guard let live = liveTasks[id] else { return }
         live.cancel(byProducingResumeData: { data in
             Task { @MainActor in
@@ -225,6 +301,11 @@ final class DownloadManager: ObservableObject {
     /// 恢复（从暂停继续）
     func resume(_ id: UUID) {
         guard let task = tasks[id], task.state == .paused else { return }
+        if segmentedEver.contains(id),
+           let provider = providers[id], let headers = headersMap[id] {
+            runSegmented(task, headers: headers, provider: provider)
+            return
+        }
         task.state = .queued
         // 保持队列顺序：插到队首，优先恢复
         queue.insert(task, at: 0)
@@ -237,6 +318,11 @@ final class DownloadManager: ObservableObject {
             live.cancel()
         }
         liveTasks[id] = nil
+        // 分片下载：通知下载器停止
+        if let seg = segmented[id] {
+            seg.cancel()
+            segmented[id] = nil
+        }
         delegate.unregister(taskID: id)
         queue.removeAll { $0.id == id }
         cleanResume(id)
@@ -254,6 +340,13 @@ final class DownloadManager: ObservableObject {
 
     func retry(_ id: UUID) {
         guard let task = tasks[id] else { return }
+        if segmentedEver.contains(id),
+           let provider = providers[id], let headers = headersMap[id] {
+            task.writtenBytes = 0
+            task.speed = 0
+            runSegmented(task, headers: headers, provider: provider)
+            return
+        }
         task.state = .queued
         task.writtenBytes = 0
         task.speed = 0

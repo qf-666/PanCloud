@@ -217,7 +217,7 @@ struct ContentView: View {
                 Spacer()
                 rowTrailing(key: String(file.fsId),
                             isDir: file.isDir == 1,
-                            onDownload: { downloadDirect(dlink: file.dlink, name: file.serverFilename) })
+                            onDownload: { downloadViaTransfer(file) })
             }
             .contentShape(Rectangle())
             .onTapGesture {
@@ -404,20 +404,65 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - 下载
+    // MARK: - 下载（直连：转存 → 自己网盘取直链 → 多线程分片）
     private func downloadDirect(dlink: String?, name: String) {
+        // 保留旧 dlink 直下作为兜底
         guard let dlink = dlink, let url = URL(string: dlink) else {
             message = "❌ 该文件没有可用下载链接"
             return
         }
-        dl.enqueue(
+        dl.enqueueSegmented(
             key: name, fileName: name,
-            provider: { url },
             headers: ["Cookie": settings.cookieString,
-                      "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)",
-                      "Referer": "https://pan.baidu.com/"]
+                      "User-Agent": BaiduTransferAPI.UA_NETDISK,
+                      "Referer": "https://pan.baidu.com/"],
+            provider: { url }
         )
-        message = "⬇️ 已加入下载队列：\(name)"
+        message = "⬇️ 已加入下载队列（多线程）：\(name)"
+    }
+
+    /// 直连·转存流程：把一个分享文件转存到自己网盘，再取直链多线程下载
+    private func downloadViaTransfer(_ file: PanFile) {
+        guard let info = directInfo else { message = "❌ 请先解析分享链接"; return }
+        let name = file.serverFilename
+        dl.enqueueSegmented(
+            key: name, fileName: name,
+            headers: ["Cookie": settings.cookieString,
+                      "User-Agent": BaiduTransferAPI.UA_NETDISK,
+                      "Referer": "https://pan.baidu.com/"],
+            provider: {
+                let cookie = self.settings.cookieString
+                let api = BaiduTransferAPI.shared
+                // 1. 取 bdstoken
+                let token = try await api.getBdstoken(cookie: cookie)
+                // 2. 拿真实 shareid/uk
+                let meta = try await api.shareInfo(surl: info.surl, cookie: cookie, bdstoken: token)
+                // 3. 提取码校验
+                if !info.pwd.isEmpty {
+                    try? await api.verifyPwd(surl: info.surl, pwd: info.pwd, cookie: cookie, bdstoken: token)
+                }
+                // 4. 确保转存目标目录存在，然后转存到自己网盘 /apps/dl
+                try? await api.ensureDir("/apps/dl", cookie: cookie, bdstoken: token)
+                let paths = try await api.transfer(shareid: meta.shareid, uk: meta.uk,
+                                                   fsids: [String(file.fsId)],
+                                                   dest: "/apps/dl", cookie: cookie, bdstoken: token)
+                let targetPath = paths.first ?? "/apps/dl/\(name)"
+                // 5. 列出自己网盘目录，优先按路径匹配，其次按文件名
+                let dir = (targetPath as NSString).deletingLastPathComponent
+                let mine = try await api.myList(dir: dir.isEmpty ? "/apps/dl" : dir, cookie: cookie, bdstoken: token)
+                guard let mineFile = mine.first(where: { $0.path == targetPath })
+                        ?? mine.first(where: { $0.name == name }) else {
+                    throw BTError.decode("转存后未在网盘找到文件: \(name)")
+                }
+                // 6. 取自己文件的直链
+                let links = try await api.selfDlink(fsids: [mineFile.fsId], cookie: cookie, bdstoken: token)
+                guard let first = links.first, let u = URL(string: first) else {
+                    throw BTError.decode("未获取到直链")
+                }
+                return u
+            }
+        )
+        message = "⬇️ 已加入下载队列（转存+多线程）：\(name)"
     }
 
     private func downloadXieyun(_ file: XieFileItem) {
@@ -436,26 +481,48 @@ struct ContentView: View {
             let targets = selection.isEmpty
                 ? files.filter { $0.isDir != 1 }
                 : files.filter { $0.isDir != 1 && selection.contains(String($0.fsId)) }
-            for f in targets {
-                let name = f.serverFilename
-                let dlink = f.dlink
-                dl.enqueue(
-                    key: name, fileName: name,
-                    provider: {
-                        if let d = dlink, let u = URL(string: d) { return u }
-                        // 过期重取
-                        if let fresh = try await BaiduPanAPI.shared.refreshDlink(
-                            info: info, cookie: self.settings.cookieString,
-                            dir: self.directDir, fileName: name),
-                           let u = URL(string: fresh) { return u }
-                        throw APIError.parseFailed("无法获取下载链接")
-                    },
-                    headers: ["Cookie": settings.cookieString,
-                              "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)",
-                              "Referer": "https://pan.baidu.com/"]
-                )
+            // 批量转存：一次转存多个 fsid，再逐个取直链
+            Task { @MainActor in
+                do {
+                    let cookie = settings.cookieString
+                    let api = BaiduTransferAPI.shared
+                    let token = try await api.getBdstoken(cookie: cookie)
+                    let meta = try await api.shareInfo(surl: info.surl, cookie: cookie, bdstoken: token)
+                    if !info.pwd.isEmpty {
+                        try? await api.verifyPwd(surl: info.surl, pwd: info.pwd, cookie: cookie, bdstoken: token)
+                    }
+                    let fsids = targets.map { String($0.fsId) }
+                    try? await api.ensureDir("/apps/dl", cookie: cookie, bdstoken: token)
+                    _ = try await api.transfer(shareid: meta.shareid, uk: meta.uk,
+                                               fsids: fsids, dest: "/apps/dl",
+                                               cookie: cookie, bdstoken: token)
+                    // 一次性列出转存结果，建立 文件名 -> fs_id 映射
+                    let mine = try await api.myList(dir: "/apps/dl", cookie: cookie, bdstoken: token)
+                    let byName = Dictionary(mine.map { ($0.name, $0.fsId) }, uniquingKeysWith: { a, _ in a })
+                    var queued = 0
+                    for f in targets {
+                        let name = f.serverFilename
+                        guard let fsid = byName[name] else { continue }
+                        dl.enqueueSegmented(
+                            key: name, fileName: name,
+                            headers: ["Cookie": cookie,
+                                      "User-Agent": BaiduTransferAPI.UA_NETDISK,
+                                      "Referer": "https://pan.baidu.com/"],
+                            provider: {
+                                let links = try await api.selfDlink(fsids: [fsid], cookie: cookie, bdstoken: token)
+                                guard let s = links.first, let u = URL(string: s) else { throw BTError.decode("无直链") }
+                                return u
+                            }
+                        )
+                        queued += 1
+                    }
+                    message = queued == targets.count
+                        ? "⬇️ 已转存并加入 \(queued) 个下载任务"
+                        : "⚠️ 转存 \(targets.count) 个，成功匹配 \(queued) 个（重名文件可能被跳过）"
+                } catch {
+                    message = "❌ 转存失败: \(error.localizedDescription)"
+                }
             }
-            message = "⬇️ 已加入 \(targets.count) 个下载任务"
         } else {
             guard let context = xieContext else { return }
             let targets = selection.isEmpty
