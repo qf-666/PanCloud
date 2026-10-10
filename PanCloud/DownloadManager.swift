@@ -6,6 +6,7 @@ import UIKit
 enum DownloadState: Equatable {
     case queued
     case downloading
+    case paused
     case finished(URL)
     case failed(String)
     case cancelled
@@ -17,10 +18,19 @@ enum DownloadState: Equatable {
         }
     }
 
+    /// 已开始（含暂停），用于 UI 判断是否显示进度块
+    var isStarted: Bool {
+        switch self {
+        case .downloading, .paused: return true
+        default: return false
+        }
+    }
+
     var label: String {
         switch self {
         case .queued: return "排队中"
         case .downloading: return "下载中"
+        case .paused: return "已暂停"
         case .finished: return "已完成"
         case .failed: return "失败"
         case .cancelled: return "已取消"
@@ -31,7 +41,7 @@ enum DownloadState: Equatable {
 // MARK: - 可观察的下载体（用于 UI 绑定）
 final class DownloadTask: Identifiable, ObservableObject {
     let id = UUID()
-    let key: String                 // 用 fs_id 或 dlink 作为去重键
+    let key: String                 // fs_id 或 name，作为去重键
     let fileName: String
     let dest: URL
 
@@ -39,6 +49,10 @@ final class DownloadTask: Identifiable, ObservableObject {
     @Published var totalBytes: Int64 = 0
     @Published var writtenBytes: Int64 = 0
     @Published var speed: Double = 0            // bytes / second
+    @Published var supportsResume: Bool = true
+
+    /// 断点续传数据（暂停/中断后用于恢复）
+    var resumeData: Data?
 
     var progress: Double {
         guard totalBytes > 0 else { return 0 }
@@ -52,62 +66,116 @@ final class DownloadTask: Identifiable, ObservableObject {
     }
 }
 
-// MARK: - 下载进度代理
-private final class ProgressDelegate: NSObject, URLSessionDownloadDelegate {
-    let onProgress: (Int64, Int64) -> Void
-    let onFinish: (URL?) -> Void
-    let onError: (Error?) -> Void
+// MARK: - 后台下载代理
+/// 注意：background URLSession 的所有 delegate 回调都可能在 App 未激活时于后台线程触发，
+/// 因此这里不假设 @MainActor，统一通过回调把结果送回 MainActor。
+final class BackgroundDownloadDelegate: NSObject, URLSessionDownloadDelegate, URLSessionTaskDelegate {
+    /// sessionIdentifier -> 任务事件处理
+    var handlers: [UUID: TaskHandler] = [:]
+    private let lock = NSLock()
 
-    init(onProgress: @escaping (Int64, Int64) -> Void,
-         onFinish: @escaping (URL?) -> Void,
-         onError: @escaping (Error?) -> Void) {
-        self.onProgress = onProgress
-        self.onFinish = onFinish
-        self.onError = onError
+    struct TaskHandler {
+        let onProgress: (Int64, Int64) -> Void
+        let onFinish: (URL?, URLSessionDownloadTask) -> Void
+        let onError: (Error?, Data?) -> Void   // 第二参：resumeData（可恢复错误时系统给出）
     }
 
+    func register(taskID: UUID, handler: TaskHandler) {
+        lock.lock(); defer { lock.unlock() }
+        handlers[taskID] = handler
+    }
+
+    func unregister(taskID: UUID) {
+        lock.lock(); defer { lock.unlock() }
+        handlers[taskID] = nil
+    }
+
+    private func handler(for task: URLSessionTask) -> TaskHandler? {
+        lock.lock(); defer { lock.unlock() }
+        // 用任务描述里存的 UUID 找回
+        guard let desc = task.taskDescription, let uuid = UUID(uuidString: desc) else { return nil }
+        return handlers[uuid]
+    }
+
+    // 进度
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
                     didWriteData bytesWritten: Int64,
                     totalBytesWritten: Int64,
                     totalBytesExpectedToWrite: Int64) {
-        onProgress(totalBytesWritten, totalBytesExpectedToWrite)
+        handler(for: downloadTask)?.onProgress(totalBytesWritten, totalBytesExpectedToWrite)
     }
 
+    // 完成落盘
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
                     didFinishDownloadingTo location: URL) {
-        onFinish(location)
+        handler(for: downloadTask)?.onFinish(location, downloadTask)
     }
 
+    // 错误 / 取消（含 resumeData）
     func urlSession(_ session: URLSession, task: URLSessionTask,
                     didCompleteWithError error: Error?) {
-        if let error = error { onError(error) }
+        guard let error = error else { return }  // 成功路径已由 didFinishDownloading 处理
+        let resumeData = (error as NSError).userInfo[NSURLSessionDownloadTaskResumeData] as? Data
+        handler(for: task)?.onError(error, resumeData)
+    }
+
+    // 后台 session 事件（系统唤醒 App 时）
+    func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
+        DispatchQueue.main.async {
+            if let handler = UIApplication.shared.backgroundCompletionHandler {
+                handler()
+                UIApplication.shared.backgroundCompletionHandler = nil
+            }
+        }
     }
 }
 
-// MARK: - 下载引擎（并发队列 + 进度 + 网速）
+// MARK: - 下载引擎（并发 + 进度 + 网速 + 断点续传 + 后台）
 @MainActor
 final class DownloadManager: ObservableObject {
     static let shared = DownloadManager()
 
-    /// 最多同时下载数
     let maxConcurrent = 3
 
     @Published private(set) var tasks: [UUID: DownloadTask] = [:]
-    /// 已完成文件（供"文件"页展示）
     @Published var finishedFiles: [URL] = []
 
     private var queue: [DownloadTask] = []
     private var runningCount = 0
-    private var sessions: [UUID: URLSession] = [:]
-    private var delegates: [UUID: ProgressDelegate] = [:]
+
+    private lazy var session: URLSession = {
+        let config = URLSessionConfiguration.background(withIdentifier: "com.qf666.pancloud.download")
+        config.timeoutIntervalForRequest = 60
+        config.timeoutIntervalForResource = 3600
+        config.isDiscretionary = false
+        config.sessionSendsLaunchEvents = true
+        config.httpMaximumConnectionsPerHost = 4
+        return URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
+    }()
+
+    private let delegate = BackgroundDownloadDelegate()
+
+    /// 内存里保存每个任务对应的 URLSessionDownloadTask（用于暂停/取消）
+    private var liveTasks: [UUID: URLSessionDownloadTask] = [:]
+    /// 每个任务的即时 provider（用于恢复时重新取 URL，若 resumeData 不可用）
+    private var providers: [UUID: () async throws -> URL] = [:]
+    private var headersMap: [UUID: [String: String]] = [:]
+
+    /// 断点数据的持久化目录
+    private lazy var resumeDir: URL = {
+        let d = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("resume", isDirectory: true)
+        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        return d
+    }()
 
     private init() {
         refreshFinished()
+        restorePendingTasks()
     }
 
     // MARK: - 公开接口
 
-    /// 批量入队。provider 负责把一条任务换成真实下载 URL（含过期重取逻辑）。
     @discardableResult
     func enqueue(
         key: String,
@@ -115,46 +183,85 @@ final class DownloadManager: ObservableObject {
         provider: @escaping () async throws -> URL,
         headers: [String: String] = [:]
     ) -> DownloadTask {
-        // 去重：同一文件正在下载则不重复加
         if let existing = tasks.values.first(where: { $0.key == key && $0.state.isActive }) {
             return existing
         }
-
         let dest = Self.safeDestination(for: fileName)
         let task = DownloadTask(key: key, fileName: fileName, dest: dest)
         tasks[task.id] = task
+        providers[task.id] = provider
+        headersMap[task.id] = headers
         queue.append(task)
-        pump(provider: provider, headers: headers)
+        pump()
         return task
+    }
+
+    /// 暂停并保存断点数据
+    func pause(_ id: UUID) {
+        guard let task = tasks[id], task.state == .downloading else { return }
+        guard let live = liveTasks[id] else { return }
+        live.cancel(byProducingResumeData: { data in
+            Task { @MainActor in
+                task.resumeData = data
+                self.persistResume(task.id, data)
+                task.state = .paused
+                task.speed = 0
+                self.liveTasks[id] = nil
+                self.delegate.unregister(taskID: id)
+                self.runningCount = max(0, self.runningCount - 1)
+                self.pump()
+            }
+        })
+    }
+
+    /// 恢复（从暂停继续）
+    func resume(_ id: UUID) {
+        guard let task = tasks[id], task.state == .paused else { return }
+        task.state = .queued
+        // 保持队列顺序：插到队首，优先恢复
+        queue.insert(task, at: 0)
+        pump()
     }
 
     func cancel(_ id: UUID) {
         guard let task = tasks[id] else { return }
-        if let session = sessions[id] {
-            session.invalidateAndCancel()
+        if let live = liveTasks[id] {
+            live.cancel()
         }
-        sessions[id] = nil
-        delegates[id] = nil
+        liveTasks[id] = nil
+        delegate.unregister(taskID: id)
         queue.removeAll { $0.id == id }
-        if task.state.isActive {
+        cleanResume(id)
+        if task.state.isActive || task.state == .paused {
             task.state = .cancelled
+            task.speed = 0
             runningCount = max(0, runningCount - 1)
         }
-        pumpPending()
+        pump()
     }
 
     func cancelAll() {
         for id in tasks.keys { cancel(id) }
     }
 
-    /// 当前活跃任务
+    func retry(_ id: UUID) {
+        guard let task = tasks[id] else { return }
+        task.state = .queued
+        task.writtenBytes = 0
+        task.speed = 0
+        // 保留 resumeData（若服务端支持 Range），否则从头
+        queue.insert(task, at: 0)
+        pump()
+    }
+
     var activeTasks: [DownloadTask] {
         tasks.values.filter { $0.state.isActive }.sorted { $0.fileName < $1.fileName }
     }
-
-    var overallSpeed: Double {
-        activeTasks.reduce(0) { $0 + $1.speed }
+    var pausedTasks: [DownloadTask] {
+        tasks.values.filter { $0.state == .paused }.sorted { $0.fileName < $1.fileName }
     }
+
+    var overallSpeed: Double { activeTasks.reduce(0) { $0 + $1.speed } }
 
     var overallProgress: Double {
         let list = activeTasks
@@ -167,7 +274,7 @@ final class DownloadManager: ObservableObject {
 
     // MARK: - 调度
 
-    private func pumpPending() {
+    private func pump() {
         while runningCount < maxConcurrent, !queue.isEmpty {
             let task = queue.removeFirst()
             guard task.state == .queued else { continue }
@@ -175,25 +282,15 @@ final class DownloadManager: ObservableObject {
         }
     }
 
-    private func pump(provider: @escaping () async throws -> URL,
-                      headers: [String: String]) {
-        while runningCount < maxConcurrent, !queue.isEmpty {
-            let task = queue.removeFirst()
-            guard task.state == .queued else { continue }
-            start(task, provider: provider, headers: headers)
-        }
-    }
-
-    private func start(_ task: DownloadTask,
-                       provider: (() async throws -> URL)? = nil,
-                       headers: [String: String] = [:]) {
+    private func start(_ task: DownloadTask) {
         runningCount += 1
         task.state = .downloading
 
         Task {
             do {
-                let url = try await (provider ?? { throw URLError(.badURL) })()
-                try await self.runDownload(task: task, url: url, headers: headers)
+                let url = try await (providers[task.id] ?? { throw URLError(.badURL) })()
+                let request = makeRequest(url: url, headers: headersMap[task.id] ?? [:])
+                try await self.runDownload(task: task, request: request)
             } catch {
                 await MainActor.run {
                     task.state = .failed(error.localizedDescription)
@@ -204,79 +301,174 @@ final class DownloadManager: ObservableObject {
         }
     }
 
-    private func runDownload(task: DownloadTask, url: URL, headers: [String: String]) async throws {
+    private func makeRequest(url: URL, headers: [String: String]) -> URLRequest {
+        var request = URLRequest(url: url)
+        for (k, v) in headers { request.setValue(v, forHTTPHeaderField: k) }
+        return request
+    }
+
+    private func runDownload(task: DownloadTask, request: URLRequest) async throws {
+        if let resumeData = task.resumeData {
+            try await startWithResumeData(task: task, resumeData: resumeData, request: request)
+        } else {
+            try await startFresh(task: task, request: request)
+        }
+    }
+
+    private func startFresh(task: DownloadTask, request: URLRequest) async throws {
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            let state = SpeedState()
-            let delegate = ProgressDelegate(
+            let speedState = SpeedState()
+            let handler = BackgroundDownloadDelegate.TaskHandler(
                 onProgress: { written, expected in
                     Task { @MainActor in
                         if expected > 0 { task.totalBytes = expected }
                         task.writtenBytes = written
-                        task.speed = state.update(written: written)
+                        task.speed = speedState.update(written: written)
                     }
                 },
-                onFinish: { tempURL in
+                onFinish: { tempURL, _ in
                     Task { @MainActor in
-                        guard let tempURL = tempURL else {
-                            task.state = .failed("下载临时文件丢失")
-                            self.finishRunning(task)
-                            cont.resume()
-                            return
-                        }
-                        do {
-                            let dest = task.dest
-                            if FileManager.default.fileExists(atPath: dest.path) {
-                                let backup = dest.deletingLastPathComponent()
-                                    .appendingPathComponent(".old_\(UUID().uuidString)_\(dest.lastPathComponent)")
-                                try? FileManager.default.moveItem(at: dest, to: backup)
-                                try? FileManager.default.removeItem(at: backup)
-                            }
-                            try FileManager.default.moveItem(at: tempURL, to: dest)
-                            task.state = .finished(dest)
-                            task.speed = 0
-                            self.finishedFiles.insert(dest, at: 0)
-                        } catch {
-                            task.state = .failed(error.localizedDescription)
-                        }
-                        self.finishRunning(task)
+                        self.complete(task: task, tempURL: tempURL)
                         cont.resume()
                     }
                 },
-                onError: { error in
+                onError: { error, resumeData in
                     Task { @MainActor in
-                        if let error = error {
-                            if (error as? URLError)?.code == .cancelled {
-                                task.state = .cancelled
-                            } else {
-                                task.state = .failed(error.localizedDescription)
-                            }
-                        }
-                        task.speed = 0
-                        self.finishRunning(task)
+                        self.handleError(task: task, error: error, resumeData: resumeData)
                         cont.resume()
                     }
                 }
             )
+            delegate.register(taskID: task.id, handler: handler)
 
-            let config = URLSessionConfiguration.default
-            config.timeoutIntervalForRequest = 60
-            let session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
-            self.delegates[task.id] = delegate
-            self.sessions[task.id] = session
-
-            var request = URLRequest(url: url)
-            for (k, v) in headers { request.setValue(v, forHTTPHeaderField: k) }
-            let downloadTask = session.downloadTask(with: request)
+            let downloadTask = self.session.downloadTask(with: request)
+            downloadTask.taskDescription = task.id.uuidString
+            self.liveTasks[task.id] = downloadTask
             downloadTask.resume()
         }
     }
 
+    private func startWithResumeData(task: DownloadTask, resumeData: Data, request: URLRequest) async throws {
+        // 若 resumeData 为空/损坏，退回全新下载
+        guard !resumeData.isEmpty else {
+            task.resumeData = nil
+            return try await startFresh(task: task, request: request)
+        }
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            let speedState = SpeedState()
+            let handler = BackgroundDownloadDelegate.TaskHandler(
+                onProgress: { written, expected in
+                    Task { @MainActor in
+                        if expected > 0 { task.totalBytes = expected }
+                        task.writtenBytes = written
+                        task.speed = speedState.update(written: written)
+                    }
+                },
+                onFinish: { tempURL, _ in
+                    Task { @MainActor in
+                        self.complete(task: task, tempURL: tempURL)
+                        cont.resume()
+                    }
+                },
+                onError: { error, newResumeData in
+                    Task { @MainActor in
+                        // 恢复失败时：若系统给了新 resumeData，丢弃旧的重来
+                        if newResumeData != nil { task.resumeData = nil; self.cleanResume(task.id) }
+                        self.handleError(task: task, error: error, resumeData: newResumeData)
+                        cont.resume()
+                    }
+                }
+            )
+            delegate.register(taskID: task.id, handler: handler)
+
+            let downloadTask = self.session.downloadTask(withResumeData: resumeData)
+            downloadTask.taskDescription = task.id.uuidString
+            self.liveTasks[task.id] = downloadTask
+            downloadTask.resume()
+        }
+    }
+
+    private func complete(task: DownloadTask, tempURL: URL?) {
+        guard let tempURL = tempURL else {
+            task.state = .failed("下载临时文件丢失")
+            finishRunning(task)
+            return
+        }
+        do {
+            let dest = task.dest
+            if FileManager.default.fileExists(atPath: dest.path) {
+                try? FileManager.default.removeItem(at: dest)
+            }
+            try FileManager.default.moveItem(at: tempURL, to: dest)
+            task.resumeData = nil
+            cleanResume(task.id)
+            task.state = .finished(dest)
+            task.speed = 0
+            if !finishedFiles.contains(dest) { finishedFiles.insert(dest, at: 0) }
+        } catch {
+            task.state = .failed(error.localizedDescription)
+        }
+        finishRunning(task)
+    }
+
+    private func handleError(task: DownloadTask, error: Error?, resumeData: Data?) {
+        if let error = error {
+            if (error as? URLError)?.code == .cancelled {
+                // 用户取消：若 pause 流程已处理则不覆盖状态
+                if task.state == .downloading { task.state = .cancelled }
+            } else {
+                // 网络中断：保存 resumeData，标记为暂停（可恢复）
+                if let data = resumeData, !data.isEmpty {
+                    task.resumeData = data
+                    persistResume(task.id, data)
+                    task.state = .paused
+                } else {
+                    task.state = .failed(error.localizedDescription)
+                }
+            }
+        }
+        task.speed = 0
+        finishRunning(task)
+    }
+
     private func finishRunning(_ task: DownloadTask) {
-        sessions[task.id]?.finishTasksAndInvalidate()
-        sessions[task.id] = nil
-        delegates[task.id] = nil
+        liveTasks[task.id] = nil
+        delegate.unregister(taskID: task.id)
         runningCount = max(0, runningCount - 1)
-        pumpPending()
+        pump()
+    }
+
+    // MARK: - 断点数据持久化
+
+    private func resumeURL(_ id: UUID) -> URL {
+        resumeDir.appendingPathComponent(id.uuidString + ".resume")
+    }
+    private func persistResume(_ id: UUID, _ data: Data?) {
+        guard let data = data else { return }
+        try? data.write(to: resumeURL(id))
+    }
+    private func loadResume(_ id: UUID) -> Data? {
+        try? Data(contentsOf: resumeURL(id))
+    }
+    private func cleanResume(_ id: UUID) {
+        try? FileManager.default.removeItem(at: resumeURL(id))
+    }
+
+    /// 启动时扫描未完成的断点数据，恢复为"已暂停"任务
+    private func restorePendingTasks() {
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(at: resumeDir, includingPropertiesForKeys: nil) else { return }
+        for f in files where f.pathExtension == "resume" {
+            guard let id = UUID(uuidString: f.deletingPathExtension().lastPathComponent),
+                  let data = try? Data(contentsOf: f), !data.isEmpty else {
+                try? fm.removeItem(at: f); continue
+            }
+            // 无对应内存任务时，仅保留断点文件，等用户重新触发时使用
+            if let task = tasks[id] {
+                task.resumeData = data
+                task.state = .paused
+            }
+        }
     }
 
     // MARK: - 本地文件
@@ -300,7 +492,6 @@ final class DownloadManager: ObservableObject {
 
     // MARK: - 工具
 
-    /// 只取文件名，剥掉路径分隔符/控制字符，避免写入非预期路径
     static func safeDestination(for rawName: String) -> URL {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         var name = rawName.components(separatedBy: CharacterSet(charactersIn: "/\\")).last ?? "file"
@@ -309,7 +500,6 @@ final class DownloadManager: ObservableObject {
         if name.isEmpty || name == "." || name == ".." { name = "download_\(Int(Date().timeIntervalSince1970))" }
 
         var dest = docs.appendingPathComponent(name)
-        // 冲突则加 (n)
         if FileManager.default.fileExists(atPath: dest.path) {
             let ext = dest.pathExtension
             let base = dest.deletingPathExtension().lastPathComponent
@@ -347,7 +537,7 @@ private final class SpeedState {
     func update(written: Int64) -> Double {
         let now = Date()
         let dt = now.timeIntervalSince(lastTime)
-        guard dt >= 0.4 else { return smoothed }   // 节流，避免抖动
+        guard dt >= 0.4 else { return smoothed }
         let delta = written - lastBytes
         lastBytes = written
         lastTime = now
@@ -355,5 +545,14 @@ private final class SpeedState {
         let instant = Double(delta) / dt
         smoothed = smoothed == 0 ? instant : (smoothed * 0.6 + instant * 0.4)
         return smoothed
+    }
+}
+
+// MARK: - 后台完成回调挂载
+extension UIApplication {
+    private static var _bgHandler: (() -> Void)?
+    var backgroundCompletionHandler: (() -> Void)? {
+        get { UIApplication._bgHandler }
+        set { UIApplication._bgHandler = newValue }
     }
 }

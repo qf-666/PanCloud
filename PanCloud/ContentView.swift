@@ -255,12 +255,29 @@ struct ContentView: View {
     private func rowTrailing(key: String, isDir: Bool, onDownload: @escaping () -> Void) -> some View {
         if isDir {
             Image(systemName: "chevron.right").foregroundColor(.secondary)
-        } else if let task = dl.tasks.values.first(where: { $0.key == key && $0.state.isActive }) {
+        } else if let task = dl.tasks.values.first(where: { $0.key == key && ($0.state.isActive || $0.state == .paused || $0.state == .failed) }) {
             VStack(alignment: .trailing, spacing: 3) {
-                ProgressView(value: task.progress)
-                    .frame(width: 64)
-                Text("\(Int((task.state == .queued ? 0 : task.progress) * 100))% \(DownloadManager.formatSpeed(task.speed))")
-                    .font(.system(size: 9)).foregroundColor(.secondary)
+                switch task.state {
+                case .downloading, .queued:
+                    ProgressView(value: task.progress)
+                        .frame(width: 64)
+                    Text("\(Int(task.progress * 100))% \(DownloadManager.formatSpeed(task.speed))")
+                        .font(.system(size: 9)).foregroundColor(.secondary)
+                case .paused:
+                    HStack(spacing: 2) {
+                        Image(systemName: "pause.circle.fill").foregroundColor(.orange)
+                        Button { dl.resume(task.id) } label: { Image(systemName: "play.circle.fill").foregroundColor(.green) }
+                    }
+                    Text("已暂停 \(Int(task.progress * 100))%")
+                        .font(.system(size: 9)).foregroundColor(.secondary)
+                case .failed:
+                    HStack(spacing: 2) {
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundColor(.red)
+                        Button { dl.retry(task.id) } label: { Image(systemName: "arrow.clockwise.circle.fill").foregroundColor(.blue) }
+                    }
+                default:
+                    EmptyView()
+                }
             }
         } else {
             Button(action: onDownload) {
@@ -461,7 +478,9 @@ struct ContentView: View {
                             HStack {
                                 Text(task.fileName).font(.subheadline).lineLimit(1)
                                 Spacer()
-                                Text(task.state.label).font(.caption2).foregroundColor(.secondary)
+                                Text(task.state.label)
+                                    .font(.caption2)
+                                    .foregroundColor(task.state == .paused ? .orange : (task.state == .failed ? .red : .secondary))
                             }
                             ProgressView(value: task.progress)
                             HStack {
@@ -471,8 +490,20 @@ struct ContentView: View {
                             }
                             .font(.system(size: 10)).foregroundColor(.secondary)
 
-                            if task.state.isActive {
-                                Button(role: .destructive) { dl.cancel(task.id) } label: { Text("取消").font(.caption) }
+                            HStack(spacing: 14) {
+                                switch task.state {
+                                case .downloading:
+                                    Button { dl.pause(task.id) } label: { Label("暂停", systemImage: "pause.fill").font(.caption) }
+                                    Button(role: .destructive) { dl.cancel(task.id) } label: { Label("取消", systemImage: "xmark").font(.caption) }
+                                case .paused:
+                                    Button { dl.resume(task.id) } label: { Label("继续", systemImage: "play.fill").font(.caption) }
+                                    Button(role: .destructive) { dl.cancel(task.id) } label: { Label("取消", systemImage: "xmark").font(.caption) }
+                                case .failed:
+                                    Button { dl.retry(task.id) } label: { Label("重试", systemImage: "arrow.clockwise").font(.caption) }
+                                    Button(role: .destructive) { dl.cancel(task.id) } label: { Label("移除", systemImage: "trash").font(.caption) }
+                                default:
+                                    EmptyView()
+                                }
                             }
                         }
                         .padding(.vertical, 2)
