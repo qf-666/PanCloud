@@ -234,4 +234,57 @@ class XiecloudAPI {
         if status == "done" { return json?["url"] as? String }
         return nil
     }
+
+    /// Context needed to download files from a parsed share.
+    struct XieShareContext {
+        let surl: String
+        let shareid: String
+        let uk: String
+        let pwd: String
+    }
+
+    /// Parse + list, and also return the share context for later downloads.
+    func parseAndGetContext(url: String, pwd: String = "") async throws -> (context: XieShareContext, files: [XieFileItem]) {
+        let parseResult = try await parse(url: url, pwd: pwd)
+
+        guard let surl = parseResult.surl,
+              let shareid = parseResult.shareid,
+              let uk = parseResult.uk else {
+            throw NSError(domain: "XiecloudAPI", code: -3,
+                          userInfo: [NSLocalizedDescriptionKey: "协云返回缺少必要字段"])
+        }
+
+        let actualPwd = parseResult.pwd ?? pwd
+        let files = try await listFiles(surl: surl, shareid: shareid, uk: uk, pwd: actualPwd)
+        return (XieShareContext(surl: surl, shareid: shareid, uk: uk, pwd: actualPwd), files)
+    }
+
+    /// Download one file: submit job, poll until done, return the final URL.
+    func downloadFile(context: XieShareContext, file: XieFileItem) async throws -> URL {
+        let items: [[String: Any]] = [[
+            "fs_id": file.fs_id,
+            "server_filename": file.server_filename,
+            "path": file.path ?? "",
+            "isdir": file.isdir,
+            "size": file.size ?? 0
+        ]]
+
+        let jobId = try await download(surl: context.surl, shareid: context.shareid, uk: context.uk, items: items, pwd: context.pwd)
+        guard !jobId.isEmpty else {
+            throw NSError(domain: "XiecloudAPI", code: -4,
+                          userInfo: [NSLocalizedDescriptionKey: "协云未返回 jobId"])
+        }
+
+        // Poll up to 120 times (max ~4 minutes)
+        for attempt in 0..<120 {
+            if let urlString = try await pollJob(id: jobId), let url = URL(string: urlString) {
+                return url
+            }
+            print("[PanCloud] xiecloud job pending, attempt \(attempt + 1)")
+            try await Task.sleep(nanoseconds: 2_000_000_000)
+        }
+
+        throw NSError(domain: "XiecloudAPI", code: -5,
+                      userInfo: [NSLocalizedDescriptionKey: "下载任务超时"])
+    }
 }
