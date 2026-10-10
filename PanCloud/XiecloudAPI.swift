@@ -52,7 +52,7 @@ struct XieParseResult: Codable {
     }
     private static func i64(_ c: KeyedDecodingContainer<CodingKeys>, _ k: CodingKeys) -> Int64? {
         if let i = try? c.decodeIfPresent(Int64.self, forKey: k) { return i }
-        if let s = try? c.decodeIfPresent(String.self, forKey: k) { return Int64(s) ?? nil }
+        if let s = try? c.decodeIfPresent(String.self, forKey: k) { return Int64(s) }
         return nil
     }
 }
