@@ -270,14 +270,14 @@ class XiecloudAPI {
                 lastError = err
             }
 
-            // If done, return immediately (files are in result.files)
-            if result.done == true {
-                return result
-            }
+            // 完成判断：新协议返回 ok:true + files 数组（无 done 字段）；
+            // 兼容旧协议的 done==true。
+            if result.done == true { return result }
+            if result.ok == true && result.files != nil { return result }
 
-            // If we got surl/shareid/uk but not done yet, still wait
-            if result.ok == true, result.surl != nil {
-                lastError = "解析中... (\("pending=\(result.pending ?? 0)"))"
+            // 服务器明确失败
+            if result.ok == false, let e = result.error {
+                throw XieError.parseFailed(e)
             }
 
             try await Task.sleep(nanoseconds: 1_500_000_000)
@@ -306,16 +306,16 @@ class XiecloudAPI {
         let data = try await perform(req)
 
         if let result = try? JSONDecoder().decode(XieParseResult.self, from: data) {
-            if result.done == true, let files = result.files {
-                return files
+            if result.done == true || (result.ok == true && result.files != nil) {
+                return result.files ?? []
             }
             // If not done, poll a few more times
             for _ in 0..<10 {
                 try await Task.sleep(nanoseconds: 1_500_000_000)
                 let retryData = try await perform(req)
                 if let retryResult = try? JSONDecoder().decode(XieParseResult.self, from: retryData),
-                   retryResult.done == true, let files = retryResult.files {
-                    return files
+                   retryResult.done == true || (retryResult.ok == true && retryResult.files != nil) {
+                    return retryResult.files ?? []
                 }
             }
         }

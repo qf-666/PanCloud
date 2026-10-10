@@ -334,6 +334,8 @@ final class DownloadManager: ObservableObject {
     private func startFresh(task: DownloadTask, request: URLRequest) async throws {
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             let speedState = SpeedState()
+            // 一次性闸门：保证 cont 只被 resume 一次（防双 resume 崩溃）
+            let gate = ResumeGate()
             let handler = BackgroundDownloadDelegate.TaskHandler(
                 onProgress: { written, expected in
                     Task { @MainActor in
@@ -345,13 +347,13 @@ final class DownloadManager: ObservableObject {
                 onFinish: { tempURL, _ in
                     Task { @MainActor in
                         self.complete(task: task, tempURL: tempURL)
-                        cont.resume()
+                        gate.once { cont.resume() }
                     }
                 },
                 onError: { error, resumeData in
                     Task { @MainActor in
                         self.handleError(task: task, error: error, resumeData: resumeData)
-                        cont.resume()
+                        gate.once { cont.resume() }
                     }
                 }
             )
@@ -372,6 +374,7 @@ final class DownloadManager: ObservableObject {
         }
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             let speedState = SpeedState()
+            let gate = ResumeGate()
             let handler = BackgroundDownloadDelegate.TaskHandler(
                 onProgress: { written, expected in
                     Task { @MainActor in
@@ -383,7 +386,7 @@ final class DownloadManager: ObservableObject {
                 onFinish: { tempURL, _ in
                     Task { @MainActor in
                         self.complete(task: task, tempURL: tempURL)
-                        cont.resume()
+                        gate.once { cont.resume() }
                     }
                 },
                 onError: { error, newResumeData in
@@ -391,7 +394,7 @@ final class DownloadManager: ObservableObject {
                         // 恢复失败时：若系统给了新 resumeData，丢弃旧的重来
                         if newResumeData != nil { task.resumeData = nil; self.cleanResume(task.id) }
                         self.handleError(task: task, error: error, resumeData: newResumeData)
-                        cont.resume()
+                        gate.once { cont.resume() }
                     }
                 }
             )
@@ -541,6 +544,19 @@ final class DownloadManager: ObservableObject {
         f.allowedUnits = [.useKB, .useMB, .useGB]
         f.countStyle = .file
         return f.string(fromByteCount: max(0, bytes))
+    }
+}
+
+// MARK: - 一次性 resume 闸门（防 CheckedContinuation 双 resume 崩溃）
+/// CheckedContinuation 只允许 resume 一次；URLSession 的
+/// didFinishDownloadingTo 与 didCompleteWithError 可能先后/并发触发，
+/// 用此闸门保证回调体只执行一次。必须从主线程（MainActor）调用。
+final class ResumeGate {
+    private var fired = false
+    func once(_ body: () -> Void) {
+        guard !fired else { return }
+        fired = true
+        body()
     }
 }
 

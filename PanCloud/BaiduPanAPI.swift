@@ -246,6 +246,7 @@ class BaiduPanAPI {
                 var request = URLRequest(url: url)
                 request.setValue(cookie, forHTTPHeaderField: "Cookie")
                 request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)", forHTTPHeaderField: "User-Agent")
+                request.setValue("https://pan.baidu.com/", forHTTPHeaderField: "Referer")
 
                 let (tempURL, response) = try await session.download(for: request)
                 if let http = response as? HTTPURLResponse, http.statusCode != 200 {

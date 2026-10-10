@@ -414,7 +414,8 @@ struct ContentView: View {
             key: name, fileName: name,
             provider: { url },
             headers: ["Cookie": settings.cookieString,
-                      "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)"]
+                      "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)",
+                      "Referer": "https://pan.baidu.com/"]
         )
         message = "⬇️ 已加入下载队列：\(name)"
     }
@@ -450,7 +451,8 @@ struct ContentView: View {
                         throw APIError.parseFailed("无法获取下载链接")
                     },
                     headers: ["Cookie": settings.cookieString,
-                              "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)"]
+                              "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)",
+                              "Referer": "https://pan.baidu.com/"]
                 )
             }
             message = "⬇️ 已加入 \(targets.count) 个下载任务"
