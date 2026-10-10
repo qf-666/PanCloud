@@ -109,7 +109,7 @@ class BaiduPanAPI {
         return ShareInfo(surl: surl, shareId: "", uk: "", pwd: pwd)
     }
     
-    func listFiles(info: ShareInfo, cookie: String) async throws -> [PanFile] {
+    func listFiles(info: ShareInfo, cookie: String, dir: String = "/") async throws -> [PanFile] {
         guard !cookie.isEmpty else { throw APIError.noCookie }
         
         var components = URLComponents(string: "https://pan.baidu.com/share/wxlist")!
@@ -118,7 +118,7 @@ class BaiduPanAPI {
             URLQueryItem(name: "version", value: "2.9.6"),
             URLQueryItem(name: "clienttype", value: "25"),
             URLQueryItem(name: "shorturl", value: info.surl),
-            URLQueryItem(name: "dir", value: "/"),
+            URLQueryItem(name: "dir", value: dir),
             URLQueryItem(name: "root", value: "1"),
             URLQueryItem(name: "page", value: "1"),
             URLQueryItem(name: "num", value: "100"),
