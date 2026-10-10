@@ -13,6 +13,7 @@
 		A10000000000000000000006 /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000006; };
 		A10000000000000000000007 /* XiecloudAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000007; };
 		A10000000000000000000008 /* XieyunWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000008; };
+		A10000000000000000000009 /* DownloadManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000009; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -23,6 +24,7 @@
 		A20000000000000000000006 /* AppSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettings.swift; sourceTree = "<group>"; };
 		A20000000000000000000007 /* XiecloudAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = XiecloudAPI.swift; sourceTree = "<group>"; };
 		A20000000000000000000008 /* XieyunWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = XieyunWebView.swift; sourceTree = "<group>"; };
+		A20000000000000000000009 /* DownloadManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadManager.swift; sourceTree = "<group>"; };
 		A20000000000000000000010 /* PanCloud.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PanCloud.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -54,6 +56,7 @@
 				A20000000000000000000005 /* BaiduPanAPI.swift */,
 				A20000000000000000000007 /* XiecloudAPI.swift */,
 				A20000000000000000000008 /* XieyunWebView.swift */,
+				A20000000000000000000009 /* DownloadManager.swift */,
 				A20000000000000000000004 /* Info.plist */,
 			);
 			path = PanCloud;
@@ -141,6 +144,7 @@
 				A10000000000000000000004 /* BaiduPanAPI.swift in Sources */,
 				A10000000000000000000007 /* XiecloudAPI.swift in Sources */,
 				A10000000000000000000008 /* XieyunWebView.swift in Sources */,
+				A10000000000000000000009 /* DownloadManager.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

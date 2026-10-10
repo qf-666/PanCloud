@@ -78,16 +78,30 @@ struct XieFileItem: Identifiable, Codable {
             fs_id = s
         } else if let i = try? c.decode(UInt64.self, forKey: .fs_id) {
             fs_id = String(i)
+        } else if let i = try? c.decode(Int64.self, forKey: .fs_id) {
+            fs_id = String(i)
         } else {
-            fs_id = ""
+            // 解码失败：生成稳定唯一 ID，避免多条撞成空串导致 List 错乱
+            fs_id = "unknown_\(UUID().uuidString)"
         }
         server_filename = (try? c.decode(String.self, forKey: .server_filename)) ?? ""
+        // isdir 兼容 int / bool / string；解不出时回退到路径启发式判断
         if let i = try? c.decode(Int.self, forKey: .isdir) {
-            isdir = i
+            isdir = (i == 1) ? 1 : 0
+        } else if let b = try? c.decode(Bool.self, forKey: .isdir) {
+            isdir = b ? 1 : 0
         } else if let s = try? c.decode(String.self, forKey: .isdir) {
-            isdir = Int(s) ?? 0
+            if let iv = Int(s) { isdir = (iv == 1) ? 1 : 0 }
+            else if let bv = Bool(s.lowercased()) { isdir = bv ? 1 : 0 }
+            else { isdir = -1 }
         } else {
-            isdir = 0
+            isdir = -1   // -1 = 未知
+        }
+        // 未知时用文件名/路径启发式修正
+        if isdir == -1 {
+            let n = (try? c.decodeIfPresent(String.self, forKey: .server_filename)) ?? ""
+            let p = (try? c.decodeIfPresent(String.self, forKey: .path)) ?? ""
+            if n.isEmpty || p.hasSuffix("/") || !n.contains(".") { isdir = 1 } else { isdir = 0 }
         }
         if let i = try? c.decode(Int64.self, forKey: .size) {
             size = i
@@ -454,6 +468,49 @@ class XiecloudAPI {
     // MARK: - High-level: Download one file end-to-end
 
     func downloadFile(context: XieShareContext, file: XieFileItem) async throws -> URL {
+        let urls = try await downloadFiles(context: context, files: [file])
+        guard let first = urls.first else { throw XieError.downloadFailed("未获取到下载链接") }
+        return first
+    }
+
+    /// 批量：一次 submit 多个 item（服务端 items 本就是数组），再统一取 token
+    func downloadFiles(context: XieShareContext, files: [XieFileItem]) async throws -> [URL] {
+        guard !files.isEmpty else { return [] }
+        let items: [[String: Any]] = files.map { f in
+            [
+                "fs_id": f.fs_id,
+                "name": f.server_filename,
+                "path": f.path ?? "",
+                "size": f.size ?? 0,
+                "md5": f.md5 ?? ""
+            ]
+        }
+
+        let jobId = try await submitDownload(
+            surl: context.surl,
+            shareid: context.shareid,
+            uk: context.uk,
+            items: items,
+            pwd: context.pwd,
+            bare: context.bare
+        )
+
+        _ = try await pollJob(id: jobId)
+
+        var urls: [URL] = []
+        for f in files {
+            let u = try await getDlToken(
+                jobId: jobId,
+                name: f.server_filename,
+                md5: f.md5,
+                bare: context.bare
+            )
+            urls.append(u)
+        }
+        return urls
+    }
+
+    func downloadFileLegacy(context: XieShareContext, file: XieFileItem) async throws -> URL {
         let items: [[String: Any]] = [[
             "fs_id": file.fs_id,
             "name": file.server_filename,

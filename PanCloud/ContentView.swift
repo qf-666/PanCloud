@@ -3,161 +3,213 @@ import UIKit
 
 struct ContentView: View {
     @EnvironmentObject var settings: AppSettings
+    @StateObject private var dl = DownloadManager.shared
+
     @State private var shareLink = ""
     @State private var pwd = ""
+
+    // 直连
     @State private var files: [PanFile] = []
+    @State private var directInfo: ShareInfo?
+    @State private var directDir = "/"
+
+    // 协云
     @State private var xieFiles: [XieFileItem] = []
+    @State private var xieContext: XiecloudAPI.XieShareContext?
+    @State private var xieDir = "/"
+
     @State private var isLoading = false
     @State private var message = ""
     @State private var showWebView = false
-    @State private var xieContext: XiecloudAPI.XieShareContext?
-    @State private var directInfo: ShareInfo?
-    @State private var downloadingId: String?
     @State private var shareItem: ShareItem?
-    @State private var directDir = "/"
-    @State private var xieDir = "/"
+
+    /// 批量选中集合（key = fs_id / fsId）
+    @State private var selection = Set<String>()
+    @State private var showActivePanel = false
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 16) {
+            VStack(spacing: 12) {
                 modePicker
                 if settings.mode == .direct { directView } else { xieyunView }
+                toolbar
                 fileList
-                Spacer()
             }
-            .padding()
+            .padding(.horizontal)
             .navigationTitle("PanCloud")
-            .fullScreenCover(isPresented: $showWebView) {
-                XieyunWebView()
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showActivePanel.toggle()
+                    } label: {
+                        ZStack(alignment: .topTrailing) {
+                            Image(systemName: "arrow.down.circle")
+                            if !dl.activeTasks.isEmpty {
+                                Text("\(dl.activeTasks.count)")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .foregroundColor(.white)
+                                    .padding(3)
+                                    .background(Color.red, in: Circle())
+                                    .offset(x: 6, y: -6)
+                            }
+                        }
+                    }
+                }
             }
-            .sheet(item: $shareItem) { item in
-                ShareSheet(items: [item.url])
-            }
+            .fullScreenCover(isPresented: $showWebView) { XieyunWebView() }
+            .sheet(item: $shareItem) { ShareSheet(items: [$0.url]) }
+            .sheet(isPresented: $showActivePanel) { activePanel }
         }
     }
 
+    // MARK: - 顶部分段
     private var modePicker: some View {
         Picker("下载模式", selection: $settings.mode) {
             ForEach(DownloadMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
         }
         .pickerStyle(.segmented)
-    }
-
-    // MARK: - Auto-extract password when link changes
-    private func autoExtractPwd(from text: String) {
-        let extracted = XiecloudAPI.extractPassword(from: text)
-        if !extracted.isEmpty && pwd.isEmpty {
-            pwd = extracted
+        .onChange(of: settings.mode) { _ in
+            selection.removeAll()
+            files = []
+            xieFiles = []
+            message = ""
         }
     }
 
+    // MARK: - 输入区
     private var directView: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 8) {
             TextField("粘贴完整 Cookie（含 BDUSS）", text: $settings.cookieString, axis: .vertical)
                 .textFieldStyle(.roundedBorder)
-                .lineLimit(3...6)
+                .lineLimit(2...4)
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
 
-            HStack {
-                TextField("分享链接", text: $shareLink)
-                    .textFieldStyle(.roundedBorder)
-                    .autocorrectionDisabled()
-                    .onChange(of: shareLink) { newValue in
-                        autoExtractPwd(from: newValue)
-                    }
-                TextField("提取码", text: $pwd)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 80)
-            }
+            linkRow
 
             Button(action: parseDirect) {
                 HStack {
                     if isLoading { ProgressView().tint(.white) }
                     Text("解析文件列表").bold()
                 }
-                .frame(maxWidth: .infinity)
-                .padding()
-                .background(Color.blue)
-                .foregroundColor(.white)
-                .cornerRadius(10)
+                .frame(maxWidth: .infinity).padding(10)
+                .background(Color.blue).foregroundColor(.white).cornerRadius(10)
             }
             .disabled(isLoading || settings.cookieString.isEmpty)
         }
     }
 
     private var xieyunView: some View {
-        VStack(spacing: 12) {
-            Text("协云模式：直接调用 pan.xiecloud.cn API，无需填写 Cookie")
-                .font(.caption)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
+        VStack(spacing: 8) {
+            Text("协云模式：调用 pan.xiecloud.cn API，无需 Cookie")
+                .font(.caption2).foregroundColor(.secondary)
 
-            HStack {
-                TextField("粘贴分享链接或完整文本", text: $shareLink)
-                    .textFieldStyle(.roundedBorder)
-                    .autocorrectionDisabled()
-                    .onChange(of: shareLink) { newValue in
-                        autoExtractPwd(from: newValue)
-                    }
-                TextField("提取码", text: $pwd)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 80)
-            }
+            linkRow
 
-            HStack(spacing: 12) {
+            HStack(spacing: 10) {
                 Button(action: parseXieyun) {
                     HStack {
                         if isLoading { ProgressView().tint(.white) }
                         Text("API 解析").bold()
                     }
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(Color.indigo)
-                    .foregroundColor(.white)
-                    .cornerRadius(10)
+                    .frame(maxWidth: .infinity).padding(10)
+                    .background(Color.indigo).foregroundColor(.white).cornerRadius(10)
                 }
                 .disabled(isLoading)
 
-                Button("打开网页版") { showWebView = true }
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(Color.gray.opacity(0.2))
-                    .cornerRadius(10)
+                Button("网页版") { showWebView = true }
+                    .frame(width: 84).padding(10)
+                    .background(Color.gray.opacity(0.2)).cornerRadius(10)
             }
         }
     }
 
+    private var linkRow: some View {
+        HStack(spacing: 8) {
+            TextField("分享链接或完整文本", text: $shareLink)
+                .textFieldStyle(.roundedBorder)
+                .autocorrectionDisabled()
+                .onChange(of: shareLink) { v in
+                    let e = XiecloudAPI.extractPassword(from: v)
+                    if !e.isEmpty && pwd.isEmpty { pwd = e }
+                }
+            TextField("提取码", text: $pwd)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 72)
+        }
+    }
+
+    // MARK: - 批量操作条
+    private var toolbar: some View {
+        let items = currentKeys
+        return Group {
+            if !items.isEmpty {
+                HStack(spacing: 10) {
+                    Button(selection.count == items.count ? "取消全选" : "全选") {
+                        if selection.count == items.count { selection.removeAll() }
+                        else { selection = Set(items) }
+                    }
+                    .font(.caption)
+
+                    Spacer()
+
+                    Button {
+                        downloadSelected()
+                    } label: {
+                        Label(selection.isEmpty ? "下载全部" : "下载选中(\(selection.count))",
+                              systemImage: "arrow.down.to.line")
+                            .font(.caption).bold()
+                    }
+                    .disabled(activeFileCount(for: items) == 0)
+                }
+                .padding(.vertical, 2)
+            }
+        }
+    }
+
+    private var currentKeys: [String] {
+        if settings.mode == .direct {
+            return files.filter { $0.isDir != 1 }.map { String($0.fsId) }
+        } else {
+            return xieFiles.filter { $0.isdir != 1 }.map { $0.fs_id }
+        }
+    }
+
+    private func activeFileCount(for keys: [String]) -> Int {
+        selection.isEmpty ? keys.count : selection.count
+    }
+
+    // MARK: - 文件列表
     private var fileList: some View {
-        Group {
+        VStack(spacing: 6) {
             if !message.isEmpty {
                 Text(message)
                     .font(.caption)
-                    .foregroundColor(message.contains("❌") ? .red : .green)
-                    .padding(.horizontal)
+                    .foregroundColor(message.contains("❌") ? .red : .secondary)
             }
 
             if settings.mode == .direct {
                 if !files.isEmpty { breadcrumb(path: directDir) { goDirect(path: $0) } }
                 List(files) { file in
-                    HStack {
+                    HStack(spacing: 10) {
+                        if file.isDir != 1 {
+                            Image(systemName: selection.contains(String(file.fsId)) ? "checkmark.circle.fill" : "circle")
+                                .foregroundColor(.blue)
+                                .onTapGesture { toggle(String(file.fsId)) }
+                        }
                         Image(systemName: file.isDir == 1 ? "folder.fill" : "doc.fill")
                             .foregroundColor(file.isDir == 1 ? .yellow : .blue)
-                        VStack(alignment: .leading) {
-                            Text(file.serverFilename).font(.subheadline)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(file.serverFilename).font(.subheadline).lineLimit(1)
                             if file.isDir != 1 {
-                                Text(formatSize(file.size)).font(.caption).foregroundColor(.secondary)
+                                Text(DownloadManager.formatSize(file.size))
+                                    .font(.caption2).foregroundColor(.secondary)
                             }
                         }
                         Spacer()
-                        if file.isDir == 1 {
-                            Image(systemName: "chevron.right").foregroundColor(.secondary)
-                        } else if let dlink = file.dlink {
-                            Button(action: { downloadDirect(dlink: dlink, name: file.serverFilename) }) {
-                                Image(systemName: "arrow.down.circle.fill")
-                                    .foregroundColor(.blue)
-                            }
-                        }
+                        rowTrailing(key: String(file.fsId),
+                                    isDir: file.isDir == 1,
+                                    onDownload: { downloadDirect(dlink: file.dlink, name: file.serverFilename) })
                     }
                     .contentShape(Rectangle())
                     .onTapGesture {
@@ -168,26 +220,25 @@ struct ContentView: View {
             } else {
                 if !xieFiles.isEmpty { breadcrumb(path: xieDir) { goXie(path: $0) } }
                 List(xieFiles) { file in
-                    HStack {
+                    HStack(spacing: 10) {
+                        if file.isdir != 1 {
+                            Image(systemName: selection.contains(file.fs_id) ? "checkmark.circle.fill" : "circle")
+                                .foregroundColor(.indigo)
+                                .onTapGesture { toggle(file.fs_id) }
+                        }
                         Image(systemName: file.isdir == 1 ? "folder.fill" : "doc.fill")
                             .foregroundColor(file.isdir == 1 ? .yellow : .indigo)
-                        VStack(alignment: .leading) {
-                            Text(file.server_filename).font(.subheadline)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(file.server_filename).font(.subheadline).lineLimit(1)
                             if file.isdir != 1, let sz = file.size {
-                                Text(formatSize(sz)).font(.caption).foregroundColor(.secondary)
+                                Text(DownloadManager.formatSize(sz))
+                                    .font(.caption2).foregroundColor(.secondary)
                             }
                         }
                         Spacer()
-                        if file.isdir == 1 {
-                            Image(systemName: "chevron.right").foregroundColor(.secondary)
-                        } else if downloadingId == file.fs_id {
-                            ProgressView()
-                        } else {
-                            Button(action: { downloadXieyun(file) }) {
-                                Image(systemName: "arrow.down.circle.fill")
-                                    .foregroundColor(.indigo)
-                            }
-                        }
+                        rowTrailing(key: file.fs_id,
+                                    isDir: file.isdir == 1,
+                                    onDownload: { downloadXieyun(file) })
                     }
                     .contentShape(Rectangle())
                     .onTapGesture {
@@ -199,19 +250,35 @@ struct ContentView: View {
         }
     }
 
+    /// 行尾：下载中显示进度，否则显示下载按钮；文件夹显示箭头
+    @ViewBuilder
+    private func rowTrailing(key: String, isDir: Bool, onDownload: @escaping () -> Void) -> some View {
+        if isDir {
+            Image(systemName: "chevron.right").foregroundColor(.secondary)
+        } else if let task = dl.tasks.values.first(where: { $0.key == key && $0.state.isActive }) {
+            VStack(alignment: .trailing, spacing: 3) {
+                ProgressView(value: task.progress)
+                    .frame(width: 64)
+                Text("\(Int((task.state == .queued ? 0 : task.progress) * 100))% \(DownloadManager.formatSpeed(task.speed))")
+                    .font(.system(size: 9)).foregroundColor(.secondary)
+            }
+        } else {
+            Button(action: onDownload) {
+                Image(systemName: "arrow.down.circle.fill").foregroundColor(.blue)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
     private func breadcrumb(path: String, onTap: @escaping (String) -> Void) -> some View {
         HStack {
-            Button {
-                onTap(parentPath(path))
-            } label: {
-                Label("返回上级", systemImage: "arrow.up.left")
-                    .font(.caption)
+            Button { onTap(parentPath(path)) } label: {
+                Label("返回上级", systemImage: "arrow.up.left").font(.caption)
             }
             .disabled(path == "/" || path.isEmpty)
             Spacer()
             Text(path).font(.caption2).foregroundColor(.secondary).lineLimit(1)
         }
-        .padding(.horizontal)
     }
 
     private func parentPath(_ p: String) -> String {
@@ -220,176 +287,227 @@ struct ContentView: View {
         return "/" + parts.joined(separator: "/")
     }
 
-    // MARK: - 直连模式
+    private func toggle(_ key: String) {
+        if selection.contains(key) { selection.remove(key) } else { selection.insert(key) }
+    }
 
+    // MARK: - 解析 / 浏览
     private func parseDirect() {
-        isLoading = true
-        message = ""
-        directDir = "/"
+        isLoading = true; message = ""; directDir = "/"; selection.removeAll()
         Task {
             do {
                 guard var info = BaiduPanAPI.shared.parseShareLink(shareLink) else {
-                    await MainActor.run { self.isLoading = false; self.message = "❌ 无法解析分享链接" }
+                    await MainActor.run { isLoading = false; message = "❌ 无法解析分享链接" }
                     return
                 }
                 if !pwd.isEmpty { info = ShareInfo(surl: info.surl, shareId: info.shareId, uk: info.uk, pwd: pwd) }
                 let result = try await BaiduPanAPI.shared.listFiles(info: info, cookie: settings.cookieString, dir: "/")
                 await MainActor.run {
-                    self.directInfo = info
-                    self.files = result
-                    self.isLoading = false
-                    self.message = "✅ 找到 \(result.count) 个文件"
+                    directInfo = info
+                    files = result
+                    isLoading = false
+                    message = "✅ 找到 \(result.count) 项（\(result.filter { $0.isDir == 1 }.count) 个文件夹）"
                 }
             } catch {
-                await MainActor.run {
-                    self.isLoading = false
-                    self.message = "❌ \(error.localizedDescription)"
-                }
+                await MainActor.run { isLoading = false; message = "❌ \(error.localizedDescription)" }
             }
         }
     }
 
     private func goDirect(path: String) {
         guard let info = directInfo else { return }
-        isLoading = true
+        isLoading = true; selection.removeAll()
         Task {
             do {
                 let result = try await BaiduPanAPI.shared.listFiles(info: info, cookie: settings.cookieString, dir: path)
                 await MainActor.run {
-                    self.directDir = path
-                    self.files = result
-                    self.isLoading = false
-                    self.message = "✅ \(path) 共 \(result.count) 项"
+                    directDir = path
+                    files = result
+                    isLoading = false
+                    message = "✅ \(path) 共 \(result.count) 项"
                 }
             } catch {
-                await MainActor.run { self.isLoading = false; self.message = "❌ \(error.localizedDescription)" }
+                await MainActor.run { isLoading = false; message = "❌ \(error.localizedDescription)" }
             }
         }
     }
-
-    private func downloadDirect(dlink: String, name: String) {
-        message = "⬇️ 正在下载 \(name)..."
-        Task {
-            do {
-                let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-                let dest = docs.appendingPathComponent(name)
-                do {
-                    try await BaiduPanAPI.shared.downloadFile(url: URL(string: dlink)!, cookie: settings.cookieString, to: dest)
-                } catch {
-                    // dlink 可能已过期 → 重新拉取文件列表拿新链接再试一次
-                    guard let info = directInfo,
-                          let fresh = try await BaiduPanAPI.shared.refreshDlink(
-                            info: info, cookie: settings.cookieString,
-                            dir: directDir, fileName: name),
-                          let freshURL = URL(string: fresh) else { throw error }
-                    try await BaiduPanAPI.shared.downloadFile(url: freshURL, cookie: settings.cookieString, to: dest)
-                }
-                await MainActor.run {
-                    self.message = "✅ 已保存: \(name)"
-                    self.shareItem = ShareItem(url: dest)
-                }
-            } catch {
-                await MainActor.run { self.message = "❌ 下载失败: \(error.localizedDescription)" }
-            }
-        }
-    }
-
-    // MARK: - 协云模式 (new flow matching web version)
 
     private func parseXieyun() {
-        isLoading = true
-        message = ""
-        xieDir = "/"
+        isLoading = true; message = ""; xieDir = "/"; selection.removeAll()
         Task {
             do {
-                // parseAndGetContext now polls /api/parse until done=true
-                // and returns files directly from the response
                 let (context, list) = try await XiecloudAPI.shared.parseAndGetContext(url: shareLink, pwd: pwd)
                 await MainActor.run {
-                    self.xieContext = context
-                    self.xieFiles = list
-                    self.isLoading = false
-                    if list.isEmpty {
-                        self.message = "⚠️ 解析成功但未找到文件"
-                    } else {
-                        self.message = "✅ 协云解析到 \(list.count) 个文件"
-                    }
+                    xieContext = context
+                    xieFiles = list
+                    isLoading = false
+                    if list.isEmpty { message = "⚠️ 解析成功但未找到文件" }
+                    else { message = "✅ 解析到 \(list.count) 项（\(list.filter { $0.isdir == 1 }.count) 个文件夹）" }
                 }
             } catch {
-                await MainActor.run {
-                    self.isLoading = false
-                    self.message = "❌ \(error.localizedDescription)"
-                }
+                await MainActor.run { isLoading = false; message = "❌ \(error.localizedDescription)" }
             }
         }
     }
 
     private func goXie(path: String) {
         guard let context = xieContext else { return }
-        isLoading = true
+        isLoading = true; selection.removeAll()
         Task {
             do {
                 let list = try await XiecloudAPI.shared.listFiles(
-                    surl: context.surl,
-                    shareid: context.shareid,
-                    uk: context.uk,
-                    pwd: context.pwd,
-                    dir: path,
-                    bare: context.bare
-                )
+                    surl: context.surl, shareid: context.shareid, uk: context.uk,
+                    pwd: context.pwd, dir: path, bare: context.bare)
                 await MainActor.run {
-                    self.xieDir = path
-                    self.xieFiles = list
-                    self.isLoading = false
-                    self.message = "✅ \(path) 共 \(list.count) 项"
+                    xieDir = path
+                    xieFiles = list
+                    isLoading = false
+                    message = "✅ \(path) 共 \(list.count) 项"
                 }
             } catch {
-                await MainActor.run { self.isLoading = false; self.message = "❌ \(error.localizedDescription)" }
+                await MainActor.run { isLoading = false; message = "❌ \(error.localizedDescription)" }
             }
         }
+    }
+
+    // MARK: - 下载
+    private func downloadDirect(dlink: String?, name: String) {
+        guard let dlink = dlink, let url = URL(string: dlink) else {
+            message = "❌ 该文件没有可用下载链接"
+            return
+        }
+        dl.enqueue(
+            key: name, fileName: name,
+            provider: { url },
+            headers: ["Cookie": settings.cookieString,
+                      "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)"]
+        )
+        message = "⬇️ 已加入下载队列：\(name)"
     }
 
     private func downloadXieyun(_ file: XieFileItem) {
-        guard let context = xieContext else {
-            message = "❌ 请先解析分享链接"
-            return
-        }
-        downloadingId = file.fs_id
-        message = "⬇️ 正在下载 \(file.server_filename)..."
-        Task {
-            do {
-                // New flow: submitDownload → pollJob → getDlToken → URLSession download
-                let url = try await XiecloudAPI.shared.downloadFile(context: context, file: file)
-                let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-                let dest = docs.appendingPathComponent(file.server_filename)
-                let (tempURL, _) = try await URLSession.shared.download(from: url)
-                if FileManager.default.fileExists(atPath: dest.path) {
-                    try? FileManager.default.removeItem(at: dest)
-                }
-                try FileManager.default.moveItem(at: tempURL, to: dest)
-                await MainActor.run {
-                    self.downloadingId = nil
-                    self.message = "✅ 已保存: \(file.server_filename)"
-                    self.shareItem = ShareItem(url: dest)
-                }
-            } catch {
-                await MainActor.run {
-                    self.downloadingId = nil
-                    self.message = "❌ 下载失败: \(error.localizedDescription)"
-                }
+        guard let context = xieContext else { message = "❌ 请先解析分享链接"; return }
+        dl.enqueue(
+            key: file.fs_id, fileName: file.server_filename,
+            provider: { try await XiecloudAPI.shared.downloadFile(context: context, file: file) }
+        )
+        message = "⬇️ 已加入下载队列：\(file.server_filename)"
+    }
+
+    /// 批量：选中项 > 全部文件
+    private func downloadSelected() {
+        if settings.mode == .direct {
+            guard let info = directInfo else { return }
+            let targets = selection.isEmpty
+                ? files.filter { $0.isDir != 1 }
+                : files.filter { $0.isDir != 1 && selection.contains(String($0.fsId)) }
+            for f in targets {
+                let name = f.serverFilename
+                let dlink = f.dlink
+                dl.enqueue(
+                    key: name, fileName: name,
+                    provider: {
+                        if let d = dlink, let u = URL(string: d) { return u }
+                        // 过期重取
+                        if let fresh = try await BaiduPanAPI.shared.refreshDlink(
+                            info: info, cookie: self.settings.cookieString,
+                            dir: self.directDir, fileName: name),
+                           let u = URL(string: fresh) { return u }
+                        throw APIError.parseFailed("无法获取下载链接")
+                    },
+                    headers: ["Cookie": settings.cookieString,
+                              "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)"]
+                )
             }
+            message = "⬇️ 已加入 \(targets.count) 个下载任务"
+        } else {
+            guard let context = xieContext else { return }
+            let targets = selection.isEmpty
+                ? xieFiles.filter { $0.isdir != 1 }
+                : xieFiles.filter { $0.isdir != 1 && selection.contains($0.fs_id) }
+            for f in targets {
+                dl.enqueue(
+                    key: f.fs_id, fileName: f.server_filename,
+                    provider: { try await XiecloudAPI.shared.downloadFile(context: context, file: f) }
+                )
+            }
+            message = "⬇️ 已加入 \(targets.count) 个下载任务"
         }
     }
 
-    private func formatSize(_ bytes: Int64) -> String {
-        let formatter = ByteCountFormatter()
-        formatter.allowedUnits = [.useKB, .useMB, .useGB]
-        formatter.countStyle = .file
-        return formatter.string(fromByteCount: bytes)
+    // MARK: - 下载面板
+    private var activePanel: some View {
+        NavigationStack {
+            List {
+                if dl.activeTasks.isEmpty {
+                    Text("没有正在进行的下载").foregroundColor(.secondary)
+                } else {
+                    Section {
+                        HStack {
+                            Text("总进度")
+                            Spacer()
+                            Text("\(Int(dl.overallProgress * 100))%")
+                            Text(DownloadManager.formatSpeed(dl.overallSpeed))
+                                .foregroundColor(.secondary)
+                        }
+                        ProgressView(value: dl.overallProgress)
+                        Button(role: .destructive) { dl.cancelAll() } label: { Text("全部取消") }
+                    }
+                }
+
+                Section("任务") {
+                    ForEach(Array(dl.tasks.values).sorted { $0.fileName < $1.fileName }) { task in
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text(task.fileName).font(.subheadline).lineLimit(1)
+                                Spacer()
+                                Text(task.state.label).font(.caption2).foregroundColor(.secondary)
+                            }
+                            ProgressView(value: task.progress)
+                            HStack {
+                                Text("\(DownloadManager.formatSize(task.writtenBytes)) / \(DownloadManager.formatSize(task.totalBytes))")
+                                Spacer()
+                                Text(DownloadManager.formatSpeed(task.speed))
+                            }
+                            .font(.system(size: 10)).foregroundColor(.secondary)
+
+                            if task.state.isActive {
+                                Button(role: .destructive) { dl.cancel(task.id) } label: { Text("取消").font(.caption) }
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+
+                Section("已下载") {
+                    if dl.finishedFiles.isEmpty {
+                        Text("暂无文件").foregroundColor(.secondary)
+                    } else {
+                        ForEach(dl.finishedFiles, id: \.self) { url in
+                            HStack {
+                                Text(url.lastPathComponent).font(.subheadline).lineLimit(1)
+                                Spacer()
+                                Button { shareItem = ShareItem(url: url) } label: { Image(systemName: "square.and.arrow.up") }
+                            }
+                            .swipeActions {
+                                Button(role: .destructive) { dl.delete(url) } label: { Text("删除") }
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("下载")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("完成") { showActivePanel = false }
+                }
+            }
+            .onAppear { dl.refreshFinished() }
+        }
     }
 }
 
-// 供 sheet 使用的可识别包装
+// MARK: - 分享
 struct ShareItem: Identifiable {
     let id = UUID()
     let url: URL
@@ -397,10 +515,8 @@ struct ShareItem: Identifiable {
 
 struct ShareSheet: UIViewControllerRepresentable {
     let items: [Any]
-
     func makeUIViewController(context: Context) -> UIActivityViewController {
         UIActivityViewController(activityItems: items, applicationActivities: nil)
     }
-
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }

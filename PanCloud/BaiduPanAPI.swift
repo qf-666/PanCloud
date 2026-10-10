@@ -31,16 +31,27 @@ struct PanFile: Identifiable, Codable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         // Baidu returns fs_id/isdir/size as strings, not numbers
         if let fsStr = try? c.decode(String.self, forKey: .fsId) {
-            self.fsId = UInt64(fsStr) ?? 0
+            self.fsId = UInt64(fsStr) ?? UInt64(abs(fsStr.hashValue))
+        } else if let num = try? c.decode(UInt64.self, forKey: .fsId) {
+            self.fsId = num
+        } else if let num = try? c.decode(Int64.self, forKey: .fsId) {
+            self.fsId = UInt64(abs(num))
         } else {
-            self.fsId = try c.decode(UInt64.self, forKey: .fsId)
+            self.fsId = UInt64(abs(UUID().uuidString.hashValue))
         }
         self.serverFilename = (try? c.decode(String.self, forKey: .serverFilename)) ?? ""
         self.path = (try? c.decode(String.self, forKey: .path)) ?? ""
+        // isdir 兼容 string / int / bool
         if let dirStr = try? c.decode(String.self, forKey: .isDir) {
-            self.isDir = Int(dirStr) ?? 0
+            self.isDir = (Int(dirStr) == 1) ? 1 : 0
+        } else if let iv = try? c.decode(Int.self, forKey: .isDir) {
+            self.isDir = (iv == 1) ? 1 : 0
+        } else if let bv = try? c.decode(Bool.self, forKey: .isDir) {
+            self.isDir = bv ? 1 : 0
         } else {
-            self.isDir = try c.decode(Int.self, forKey: .isDir)
+            // 兜底：无扩展名视为目录
+            let n = (try? c.decodeIfPresent(String.self, forKey: .serverFilename)) ?? ""
+            self.isDir = (!n.isEmpty && !n.contains(".")) ? 1 : 0
         }
         if let sizeStr = try? c.decode(String.self, forKey: .size) {
             self.size = Int64(sizeStr) ?? 0
