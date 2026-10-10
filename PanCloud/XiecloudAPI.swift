@@ -478,11 +478,11 @@ class XiecloudAPI {
         guard !files.isEmpty else { return [] }
         let items: [[String: Any]] = files.map { f in
             [
-                "fs_id": f.fs_id,
-                "name": f.server_filename,
-                "path": f.path ?? "",
-                "size": f.size ?? 0,
-                "md5": f.md5 ?? ""
+                "fs_id": f.fs_id as Any,
+                "name": f.server_filename as Any,
+                "path": (f.path ?? "") as Any,
+                "size": (f.size ?? 0) as Any,
+                "md5": (f.md5 ?? "") as Any
             ]
         }
 
@@ -530,7 +530,7 @@ class XiecloudAPI {
         )
 
         // Step 4: poll until done
-        let jobResult = try await pollJob(id: jobId)
+        _ = try await pollJob(id: jobId)
 
         // Step 5: get real download URL via dl-token
         let dlUrl = try await getDlToken(

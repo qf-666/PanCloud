@@ -206,7 +206,7 @@ final class DownloadManager: ObservableObject {
 
     private func runDownload(task: DownloadTask, url: URL, headers: [String: String]) async throws {
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            let state = Self.SpeedState()
+            let state = SpeedState()
             let delegate = ProgressDelegate(
                 onProgress: { written, expected in
                     Task { @MainActor in
