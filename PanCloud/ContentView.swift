@@ -8,12 +8,12 @@ struct ContentView: View {
     @State private var shareLink = ""
     @State private var pwd = ""
 
-    // ç´è¿
+    // 直连
     @State private var files: [PanFile] = []
     @State private var directInfo: ShareInfo?
     @State private var directDir = "/"
 
-    // åäº
+    // 协云
     @State private var xieFiles: [XieFileItem] = []
     @State private var xieContext: XiecloudAPI.XieShareContext?
     @State private var xieDir = "/"
@@ -23,7 +23,7 @@ struct ContentView: View {
     @State private var showWebView = false
     @State private var shareItem: ShareItem?
 
-    /// æ¹ééä¸­éåï¼key = fs_id / fsIdï¼
+    /// 批量选中集合（key = fs_id / fsId）
     @State private var selection = Set<String>()
     @State private var showActivePanel = false
 
@@ -62,9 +62,9 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - é¡¶é¨åæ®µ
+    // MARK: - 顶部分段
     private var modePicker: some View {
-        Picker("ä¸è½½æ¨¡å¼", selection: $settings.mode) {
+        Picker("下载模式", selection: $settings.mode) {
             ForEach(DownloadMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
         }
         .pickerStyle(.segmented)
@@ -76,10 +76,10 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - è¾å¥åº
+    // MARK: - 输入区
     private var directView: some View {
         VStack(spacing: 8) {
-            TextField("ç²è´´å®æ´ Cookieï¼å« BDUSSï¼", text: $settings.cookieString, axis: .vertical)
+            TextField("粘贴完整 Cookie（含 BDUSS）", text: $settings.cookieString, axis: .vertical)
                 .textFieldStyle(.roundedBorder)
                 .lineLimit(2...4)
                 .autocorrectionDisabled()
@@ -90,7 +90,7 @@ struct ContentView: View {
             Button(action: parseDirect) {
                 HStack {
                     if isLoading { ProgressView().tint(.white) }
-                    Text("è§£ææä»¶åè¡¨").bold()
+                    Text("解析文件列表").bold()
                 }
                 .frame(maxWidth: .infinity).padding(10)
                 .background(Color.blue).foregroundColor(.white).cornerRadius(10)
@@ -101,7 +101,7 @@ struct ContentView: View {
 
     private var xieyunView: some View {
         VStack(spacing: 8) {
-            Text("åäºæ¨¡å¼ï¼è°ç¨ pan.xiecloud.cn APIï¼æ é Cookie")
+            Text("协云模式：调用 pan.xiecloud.cn API，无需 Cookie")
                 .font(.caption2).foregroundColor(.secondary)
 
             linkRow
@@ -110,14 +110,14 @@ struct ContentView: View {
                 Button(action: parseXieyun) {
                     HStack {
                         if isLoading { ProgressView().tint(.white) }
-                        Text("API è§£æ").bold()
+                        Text("API 解析").bold()
                     }
                     .frame(maxWidth: .infinity).padding(10)
                     .background(Color.indigo).foregroundColor(.white).cornerRadius(10)
                 }
                 .disabled(isLoading)
 
-                Button("ç½é¡µç") { showWebView = true }
+                Button("网页版") { showWebView = true }
                     .frame(width: 84).padding(10)
                     .background(Color.gray.opacity(0.2)).cornerRadius(10)
             }
@@ -126,26 +126,26 @@ struct ContentView: View {
 
     private var linkRow: some View {
         HStack(spacing: 8) {
-            TextField("åäº«é¾æ¥æå®æ´ææ¬", text: $shareLink)
+            TextField("分享链接或完整文本", text: $shareLink)
                 .textFieldStyle(.roundedBorder)
                 .autocorrectionDisabled()
                 .onChange(of: shareLink) { v in
                     let e = XiecloudAPI.extractPassword(from: v)
                     if !e.isEmpty && pwd.isEmpty { pwd = e }
                 }
-            TextField("æåç ", text: $pwd)
+            TextField("提取码", text: $pwd)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 72)
         }
     }
 
-    // MARK: - æ¹éæä½æ¡
+    // MARK: - 批量操作条
     private var toolbar: some View {
         let items = currentKeys
         return Group {
             if !items.isEmpty {
                 HStack(spacing: 10) {
-                    Button(selection.count == items.count ? "åæ¶å¨é" : "å¨é") {
+                    Button(selection.count == items.count ? "取消全选" : "全选") {
                         if selection.count == items.count { selection.removeAll() }
                         else { selection = Set(items) }
                     }
@@ -156,7 +156,7 @@ struct ContentView: View {
                     Button {
                         downloadSelected()
                     } label: {
-                        Label(selection.isEmpty ? "ä¸è½½å¨é¨" : "ä¸è½½éä¸­(\(selection.count))",
+                        Label(selection.isEmpty ? "下载全部" : "下载选中(\(selection.count))",
                               systemImage: "arrow.down.to.line")
                             .font(.caption).bold()
                     }
@@ -179,13 +179,13 @@ struct ContentView: View {
         selection.isEmpty ? keys.count : selection.count
     }
 
-    // MARK: - æä»¶åè¡¨
+    // MARK: - 文件列表
     private var fileList: some View {
         VStack(spacing: 6) {
             if !message.isEmpty {
                 Text(message)
                     .font(.caption)
-                    .foregroundColor(message.contains("â") ? .red : .secondary)
+                    .foregroundColor(message.contains("❌") ? .red : .secondary)
             }
             if settings.mode == .direct {
                 directFileList
@@ -259,7 +259,7 @@ struct ContentView: View {
         .listStyle(.plain)
     }
 
-    /// è¡å°¾ï¼ä¸è½½ä¸­æ¾ç¤ºè¿åº¦ï¼å¦åæ¾ç¤ºä¸è½½æé®ï¼æä»¶å¤¹æ¾ç¤ºç®­å¤´
+    /// 行尾：下载中显示进度，否则显示下载按钮；文件夹显示箭头
     @ViewBuilder
     private func rowTrailing(key: String, isDir: Bool, onDownload: @escaping () -> Void) -> some View {
         if isDir {
@@ -289,7 +289,7 @@ struct ContentView: View {
                         Image(systemName: "play.circle.fill").foregroundColor(.green)
                     }
                 }
-                Text("å·²æå \(Int(task.progress * 100))%")
+                Text("已暂停 \(Int(task.progress * 100))%")
                     .font(.system(size: 9)).foregroundColor(.secondary)
             case .failed:
                 HStack(spacing: 2) {
@@ -307,7 +307,7 @@ struct ContentView: View {
     private func breadcrumb(path: String, onTap: @escaping (String) -> Void) -> some View {
         HStack {
             Button { onTap(parentPath(path)) } label: {
-                Label("è¿åä¸çº§", systemImage: "arrow.up.left").font(.caption)
+                Label("返回上级", systemImage: "arrow.up.left").font(.caption)
             }
             .disabled(path == "/" || path.isEmpty)
             Spacer()
@@ -325,13 +325,13 @@ struct ContentView: View {
         if selection.contains(key) { selection.remove(key) } else { selection.insert(key) }
     }
 
-    // MARK: - è§£æ / æµè§
+    // MARK: - 解析 / 浏览
     private func parseDirect() {
         isLoading = true; message = ""; directDir = "/"; selection.removeAll()
         Task {
             do {
                 guard var info = BaiduPanAPI.shared.parseShareLink(shareLink) else {
-                    await MainActor.run { isLoading = false; message = "â æ æ³è§£æåäº«é¾æ¥" }
+                    await MainActor.run { isLoading = false; message = "❌ 无法解析分享链接" }
                     return
                 }
                 if !pwd.isEmpty { info = ShareInfo(surl: info.surl, shareId: info.shareId, uk: info.uk, pwd: pwd) }
@@ -340,10 +340,10 @@ struct ContentView: View {
                     directInfo = info
                     files = result
                     isLoading = false
-                    message = "â æ¾å° \(result.count) é¡¹ï¼\(result.filter { $0.isDir == 1 }.count) ä¸ªæä»¶å¤¹ï¼"
+                    message = "✅ 找到 \(result.count) 项（\(result.filter { $0.isDir == 1 }.count) 个文件夹）"
                 }
             } catch {
-                await MainActor.run { isLoading = false; message = "â \(error.localizedDescription)" }
+                await MainActor.run { isLoading = false; message = "❌ \(error.localizedDescription)" }
             }
         }
     }
@@ -358,10 +358,10 @@ struct ContentView: View {
                     directDir = path
                     files = result
                     isLoading = false
-                    message = "â \(path) å± \(result.count) é¡¹"
+                    message = "✅ \(path) 共 \(result.count) 项"
                 }
             } catch {
-                await MainActor.run { isLoading = false; message = "â \(error.localizedDescription)" }
+                await MainActor.run { isLoading = false; message = "❌ \(error.localizedDescription)" }
             }
         }
     }
@@ -375,11 +375,11 @@ struct ContentView: View {
                     xieContext = context
                     xieFiles = list
                     isLoading = false
-                    if list.isEmpty { message = "â ï¸ è§£ææåä½æªæ¾å°æä»¶" }
-                    else { message = "â è§£æå° \(list.count) é¡¹ï¼\(list.filter { $0.isdir == 1 }.count) ä¸ªæä»¶å¤¹ï¼" }
+                    if list.isEmpty { message = "⚠️ 解析成功但未找到文件" }
+                    else { message = "✅ 解析到 \(list.count) 项（\(list.filter { $0.isdir == 1 }.count) 个文件夹）" }
                 }
             } catch {
-                await MainActor.run { isLoading = false; message = "â \(error.localizedDescription)" }
+                await MainActor.run { isLoading = false; message = "❌ \(error.localizedDescription)" }
             }
         }
     }
@@ -396,19 +396,19 @@ struct ContentView: View {
                     xieDir = path
                     xieFiles = list
                     isLoading = false
-                    message = "â \(path) å± \(list.count) é¡¹"
+                    message = "✅ \(path) 共 \(list.count) 项"
                 }
             } catch {
-                await MainActor.run { isLoading = false; message = "â \(error.localizedDescription)" }
+                await MainActor.run { isLoading = false; message = "❌ \(error.localizedDescription)" }
             }
         }
     }
 
-    // MARK: - ä¸è½½ï¼ç´è¿ï¼è½¬å­ â èªå·±ç½çåç´é¾ â å¤çº¿ç¨åçï¼
+    // MARK: - 下载（直连：转存 → 自己网盘取直链 → 多线程分片）
     private func downloadDirect(dlink: String?, name: String) {
-        // ä¿çæ§ dlink ç´ä¸ä½ä¸ºååº
+        // 保留旧 dlink 直下作为兜底
         guard let dlink = dlink, let url = URL(string: dlink) else {
-            message = "â è¯¥æä»¶æ²¡æå¯ç¨ä¸è½½é¾æ¥"
+            message = "❌ 该文件没有可用下载链接"
             return
         }
         dl.enqueueSegmented(
@@ -418,12 +418,12 @@ struct ContentView: View {
                       "Referer": "https://pan.baidu.com/"],
             provider: { url }
         )
-        message = "â¬ï¸ å·²å å¥ä¸è½½éåï¼å¤çº¿ç¨ï¼ï¼\(name)"
+        message = "⬇️ 已加入下载队列（多线程）：\(name)"
     }
 
-    /// ç´è¿Â·è½¬å­æµç¨ï¼æä¸ä¸ªåäº«æä»¶è½¬å­å°èªå·±ç½çï¼ååç´é¾å¤çº¿ç¨ä¸è½½
+    /// 直连·转存流程：把一个分享文件转存到自己网盘，再取直链多线程下载
     private func downloadViaTransfer(_ file: PanFile) {
-        guard let info = directInfo else { message = "â è¯·åè§£æåäº«é¾æ¥"; return }
+        guard let info = directInfo else { message = "❌ 请先解析分享链接"; return }
         let name = file.serverFilename
         dl.enqueueSegmented(
             key: name, fileName: name,
@@ -438,58 +438,58 @@ struct ContentView: View {
                 }
                 // 兜底：转存路线
                 let api = BaiduTransferAPI.shared
-                // 1. å bdstoken
+                // 1. 取 bdstoken
                 let token = try await api.getBdstoken(cookie: cookie)
-                // 2. æ¿çå® shareid/uk
+                // 2. 拿真实 shareid/uk
                 let meta = try await api.shareInfo(surl: info.surl, cookie: cookie, bdstoken: token)
-                // 3. æåç æ ¡éª
+                // 3. 提取码校验
                 if !info.pwd.isEmpty {
                     try? await api.verifyPwd(surl: info.surl, pwd: info.pwd, cookie: cookie, bdstoken: token)
                 }
-                // 4. ç¡®ä¿è½¬å­ç®æ ç®å½å­å¨ï¼ç¶åè½¬å­å°èªå·±ç½ç /apps/dl
+                // 4. 确保转存目标目录存在，然后转存到自己网盘 /apps/dl
                 try? await api.ensureDir("/apps/dl", cookie: cookie, bdstoken: token)
                 let paths = try await api.transfer(shareid: meta.shareid, uk: meta.uk,
                                                    fsids: [String(file.fsId)],
                                                    dest: "/apps/dl", cookie: cookie, bdstoken: token)
                 let targetPath = paths.first ?? "/apps/dl/\(name)"
-                // 5. ååºèªå·±ç½çç®å½ï¼ä¼åæè·¯å¾å¹éï¼å¶æ¬¡ææä»¶å
+                // 5. 列出自己网盘目录，优先按路径匹配，其次按文件名
                 let dir = (targetPath as NSString).deletingLastPathComponent
                 let mine = try await api.myList(dir: dir.isEmpty ? "/apps/dl" : dir, cookie: cookie, bdstoken: token)
                 guard let mineFile = mine.first(where: { $0.path == targetPath })
                         ?? mine.first(where: { $0.name == name }) else {
-                    throw BTError.decode("è½¬å­åæªå¨ç½çæ¾å°æä»¶: \(name)")
+                    throw BTError.decode("转存后未在网盘找到文件: \(name)")
                 }
-                // 6. åèªå·±æä»¶çç´é¾
+                // 6. 取自己文件的直链
                 let links = try await api.selfDlink(fsids: [mineFile.fsId], cookie: cookie, bdstoken: token)
                 guard let first = links.first, let u = URL(string: first) else {
-                    throw BTError.decode("æªè·åå°ç´é¾")
+                    throw BTError.decode("未获取到直链")
                 }
                 return u
             }
         )
-        message = "â¬ï¸ å·²å å¥ä¸è½½éåï¼è½¬å­+å¤çº¿ç¨ï¼ï¼\(name)"
+        message = "⬇️ 已加入下载队列（转存+多线程）：\(name)"
     }
 
     private func downloadXieyun(_ file: XieFileItem) {
-        guard let context = xieContext else { message = "â è¯·åè§£æåäº«é¾æ¥"; return }
-        // åäº /dl/ éå¸¦ x-access-tokenï¼å®æµ 403 "ä¸è½½ç¥¨æ®æ æ"ï¼ï¼æ¯æ Range â åçå¤çº¿ç¨
+        guard let context = xieContext else { message = "❌ 请先解析分享链接"; return }
+        // 协云 /dl/ 需带 x-access-token（实测 403 "下载票据无效"）；支持 Range → 分片多线程
         dl.enqueueSegmented(
             key: file.fs_id, fileName: file.server_filename,
             headers: ["x-access-token": XiecloudAPI.shared.accessToken,
                       "User-Agent": "Mozilla/5.0"],
             provider: { try await XiecloudAPI.shared.downloadFile(context: context, file: file) }
         )
-        message = "â¬ï¸ å·²å å¥ä¸è½½éåï¼åäºÂ·å¤çº¿ç¨ï¼ï¼\(file.server_filename)"
+        message = "⬇️ 已加入下载队列（协云·多线程）：\(file.server_filename)"
     }
 
-    /// æ¹éï¼éä¸­é¡¹ > å¨é¨æä»¶
+    /// 批量：选中项 > 全部文件
     private func downloadSelected() {
         if settings.mode == .direct {
             guard let info = directInfo else { return }
             let targets = selection.isEmpty
                 ? files.filter { $0.isDir != 1 }
                 : files.filter { $0.isDir != 1 && selection.contains(String($0.fsId)) }
-            // æ¹éè½¬å­ï¼ä¸æ¬¡è½¬å­å¤ä¸ª fsidï¼åéä¸ªåç´é¾
+            // 批量转存：一次转存多个 fsid，再逐个取直链
             Task { @MainActor in
                 do {
                     let cookie = settings.cookieString
@@ -504,7 +504,7 @@ struct ContentView: View {
                     _ = try await api.transfer(shareid: meta.shareid, uk: meta.uk,
                                                fsids: fsids, dest: "/apps/dl",
                                                cookie: cookie, bdstoken: token)
-                    // ä¸æ¬¡æ§ååºè½¬å­ç»æï¼å»ºç« æä»¶å -> fs_id æ å°
+                    // 一次性列出转存结果，建立 文件名 -> fs_id 映射
                     let mine = try await api.myList(dir: "/apps/dl", cookie: cookie, bdstoken: token)
                     let byName = Dictionary(mine.map { ($0.name, $0.fsId) }, uniquingKeysWith: { a, _ in a })
                     var queued = 0
@@ -518,17 +518,17 @@ struct ContentView: View {
                                       "Referer": "https://pan.baidu.com/"],
                             provider: {
                                 let links = try await api.selfDlink(fsids: [fsid], cookie: cookie, bdstoken: token)
-                                guard let s = links.first, let u = URL(string: s) else { throw BTError.decode("æ ç´é¾") }
+                                guard let s = links.first, let u = URL(string: s) else { throw BTError.decode("无直链") }
                                 return u
                             }
                         )
                         queued += 1
                     }
                     message = queued == targets.count
-                        ? "â¬ï¸ å·²è½¬å­å¹¶å å¥ \(queued) ä¸ªä¸è½½ä»»å¡"
-                        : "â ï¸ è½¬å­ \(targets.count) ä¸ªï¼æåå¹é \(queued) ä¸ªï¼éåæä»¶å¯è½è¢«è·³è¿ï¼"
+                        ? "⬇️ 已转存并加入 \(queued) 个下载任务"
+                        : "⚠️ 转存 \(targets.count) 个，成功匹配 \(queued) 个（重名文件可能被跳过）"
                 } catch {
-                    message = "â è½¬å­å¤±è´¥: \(error.localizedDescription)"
+                    message = "❌ 转存失败: \(error.localizedDescription)"
                 }
             }
         } else {
@@ -544,39 +544,39 @@ struct ContentView: View {
                     provider: { try await XiecloudAPI.shared.downloadFile(context: context, file: f) }
                 )
             }
-            message = "â¬ï¸ å·²å å¥ \(targets.count) ä¸ªä¸è½½ä»»å¡ï¼åäºÂ·å¤çº¿ç¨ï¼"
+            message = "⬇️ 已加入 \(targets.count) 个下载任务（协云·多线程）"
         }
     }
 
-    // MARK: - ä¸è½½é¢æ¿
+    // MARK: - 下载面板
     private var activePanel: some View {
         NavigationStack {
             List {
                 if dl.activeTasks.isEmpty {
-                    Text("æ²¡ææ­£å¨è¿è¡çä¸è½½").foregroundColor(.secondary)
+                    Text("没有正在进行的下载").foregroundColor(.secondary)
                 } else {
                     Section {
                         HStack {
-                            Text("æ»è¿åº¦")
+                            Text("总进度")
                             Spacer()
                             Text("\(Int(dl.overallProgress * 100))%")
                             Text(DownloadManager.formatSpeed(dl.overallSpeed))
                                 .foregroundColor(.secondary)
                         }
                         ProgressView(value: dl.overallProgress)
-                        Button(role: .destructive) { dl.cancelAll() } label: { Text("å¨é¨åæ¶") }
+                        Button(role: .destructive) { dl.cancelAll() } label: { Text("全部取消") }
                     }
                 }
 
-                Section("ä»»å¡") {
+                Section("任务") {
                     ForEach(Array(dl.tasks.values).sorted { $0.fileName < $1.fileName }) { task in
                         taskRow(task)
                     }
                 }
 
-                Section("å·²ä¸è½½") {
+                Section("已下载") {
                     if dl.finishedFiles.isEmpty {
-                        Text("ææ æä»¶").foregroundColor(.secondary)
+                        Text("暂无文件").foregroundColor(.secondary)
                     } else {
                         ForEach(dl.finishedFiles, id: \.self) { url in
                             HStack {
@@ -585,23 +585,23 @@ struct ContentView: View {
                                 Button { shareItem = ShareItem(url: url) } label: { Image(systemName: "square.and.arrow.up") }
                             }
                             .swipeActions {
-                                Button(role: .destructive) { dl.delete(url) } label: { Text("å é¤") }
+                                Button(role: .destructive) { dl.delete(url) } label: { Text("删除") }
                             }
                         }
                     }
                 }
             }
-            .navigationTitle("ä¸è½½")
+            .navigationTitle("下载")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("å®æ") { showActivePanel = false }
+                    Button("完成") { showActivePanel = false }
                 }
             }
             .onAppear { dl.refreshFinished() }
         }
     }
 
-    // MARK: - ä»»å¡è¡ï¼é¢æ¿ï¼
+    // MARK: - 任务行（面板）
     @ViewBuilder
     private func taskRow(_ task: DownloadTask) -> some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -642,24 +642,24 @@ struct ContentView: View {
             switch task.state {
             case .downloading:
                 Button { dl.pause(task.id) } label: {
-                    Label("æå", systemImage: "pause.fill").font(.caption)
+                    Label("暂停", systemImage: "pause.fill").font(.caption)
                 }
                 Button(role: .destructive) { dl.cancel(task.id) } label: {
-                    Label("åæ¶", systemImage: "xmark").font(.caption)
+                    Label("取消", systemImage: "xmark").font(.caption)
                 }
             case .paused:
                 Button { dl.resume(task.id) } label: {
-                    Label("ç»§ç»­", systemImage: "play.fill").font(.caption)
+                    Label("继续", systemImage: "play.fill").font(.caption)
                 }
                 Button(role: .destructive) { dl.cancel(task.id) } label: {
-                    Label("åæ¶", systemImage: "xmark").font(.caption)
+                    Label("取消", systemImage: "xmark").font(.caption)
                 }
             case .failed:
                 Button { dl.retry(task.id) } label: {
-                    Label("éè¯", systemImage: "arrow.clockwise").font(.caption)
+                    Label("重试", systemImage: "arrow.clockwise").font(.caption)
                 }
                 Button(role: .destructive) { dl.cancel(task.id) } label: {
-                    Label("ç§»é¤", systemImage: "trash").font(.caption)
+                    Label("移除", systemImage: "trash").font(.caption)
                 }
             default:
                 EmptyView()
@@ -668,7 +668,7 @@ struct ContentView: View {
     }
 }
 
-// MARK: - åäº«
+// MARK: - 分享
 struct ShareItem: Identifiable {
     let id = UUID()
     let url: URL
