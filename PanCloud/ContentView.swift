@@ -138,7 +138,7 @@ struct ContentView: View {
                         Spacer()
                         if file.isDir == 1 {
                             Image(systemName: "chevron.right").foregroundColor(.secondary)
-                        } else if let dlink = file.dlink {
+                        } else {
                             Button(action: { downloadDirect(fsId: file.fsId, name: file.serverFilename) }) {
                                 Image(systemName: "arrow.down.circle.fill")
                                     .foregroundColor(.blue)
