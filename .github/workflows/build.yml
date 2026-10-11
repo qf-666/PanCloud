@@ -11,37 +11,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Show Xcode version
-        run: xcodebuild -version
-
       - name: Build unsigned archive
         run: |
           set -o pipefail
-          xcodebuild archive \
-            -project PanCloud.xcodeproj \
-            -scheme PanCloud \
-            -configuration Release \
-            -archivePath "$GITHUB_WORKSPACE/build/PanCloud.xcarchive" \
-            -destination "generic/platform=iOS" \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO \
-            SWIFT_VERSION=5.0 \
-            2>&1 | tail -120
+          set -x
+          xcodebuild archive             -project PanCloud.xcodeproj             -scheme PanCloud             -configuration Release             -archivePath "$GITHUB_WORKSPACE/build/PanCloud.xcarchive"             -destination "generic/platform=iOS"             CODE_SIGN_IDENTITY=""             CODE_SIGNING_REQUIRED=NO             CODE_SIGNING_ALLOWED=NO             SWIFT_VERSION=5.0             > "$GITHUB_WORKSPACE/build.log" 2>&1
+          echo "exit=$?"
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
 
       - name: Package IPA for TrollStore
         run: |
           set -eux
           ARCHIVE="$GITHUB_WORKSPACE/build/PanCloud.xcarchive"
-          echo "=== archive tree ==="
-          find "$ARCHIVE" -maxdepth 3 -name "*.app" -print || true
           APP_PATH="$ARCHIVE/Products/Applications/PanCloud.app"
           if [ ! -d "$APP_PATH" ]; then
-            echo "PanCloud.app not found, searching..."
+            echo "not found, searching"
             APP_PATH=$(find "$ARCHIVE" -maxdepth 4 -name "PanCloud.app" -type d | head -1)
           fi
-          echo "APP_PATH=$APP_PATH"
-          ls -la "$APP_PATH" | head
+          echo "APP=$APP_PATH"
+          [ -d "$APP_PATH" ]
           rm -rf "$GITHUB_WORKSPACE/build/ipa"
           mkdir -p "$GITHUB_WORKSPACE/build/ipa/Payload"
           cp -R "$APP_PATH" "$GITHUB_WORKSPACE/build/ipa/Payload/"
@@ -50,6 +44,7 @@ jobs:
           ls -lh PanCloud.ipa
 
       - name: Upload IPA
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: PanCloud-TrollStore-IPA
