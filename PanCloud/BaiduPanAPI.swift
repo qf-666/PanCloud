@@ -231,7 +231,7 @@ class BaiduPanAPI {
             URLQueryItem(name: "clienttype", value: "0"),
             URLQueryItem(name: "app_id", value: "250528"),
             URLQueryItem(name: "web", value: "1"),
-            URLQueryItem(name: "fields", value: #"\["bdstoken\]"#)
+            URLQueryItem(name: "fields", value: #"["bdstoken"]"#)
         ]
         var req = URLRequest(url: comps.url!)
         req.setValue(UA_WEB, forHTTPHeaderField: "User-Agent")
@@ -251,7 +251,7 @@ class BaiduPanAPI {
             URLQueryItem(name: "clienttype", value: "0"),
             URLQueryItem(name: "app_id", value: "250528"),
             URLQueryItem(name: "web", value: "1"),
-            URLQueryItem(name: "fields", value: #"\["sign1","sign2","sign3","timestamp\]"#)
+            URLQueryItem(name: "fields", value: #"["sign1","sign2","sign3","timestamp"]"#)
         ]
         var req = URLRequest(url: comps.url!)
         req.setValue(UA_WEB, forHTTPHeaderField: "User-Agent")
