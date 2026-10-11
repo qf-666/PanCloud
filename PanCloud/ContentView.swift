@@ -432,11 +432,19 @@ struct ContentView: View {
                       "Referer": "https://pan.baidu.com/"],
             provider: {
                 let cookie = self.settings.cookieString
-                // 0. 零转存 vip=2：文件若已在自己网盘，直接取 dlink（免转存，走 8 线程分片）
-                if let vip = try? await BaiduPanAPI.shared.dlinkSelf(fsIds: [String(file.fsId)], cookie: cookie) {
-                    if let first = vip.first, let u = URL(string: first) { return u }
+                // 0. 优先：wxlist 直接给的 dlink（最快，无需签名/转存）
+                if let d = file.dlink, let u = URL(string: d) {
+                    print("[PanCloud] use wxlist dlink directly")
+                    return u
                 }
-                // 兜底：转存路线
+                // 1. 零转存 vip=2：文件若已在自己网盘，直接取 dlink（免转存，走 8 线程分片）
+                if let vip = try? await BaiduPanAPI.shared.dlinkSelf(fsIds: [String(file.fsId)], cookie: cookie) {
+                    if let first = vip.first, let u = URL(string: first) {
+                        print("[PanCloud] use vip=2 dlink")
+                        return u
+                    }
+                }
+                // 2. 兜底：转存路线
                 let api = BaiduTransferAPI.shared
                 // 1. 取 bdstoken
                 let token = try await api.getBdstoken(cookie: cookie)
