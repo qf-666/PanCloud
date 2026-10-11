@@ -16,6 +16,7 @@ jobs:
 
       - name: Build unsigned archive
         run: |
+          set -o pipefail
           xcodebuild archive \
             -project PanCloud.xcodeproj \
             -scheme PanCloud \
@@ -26,15 +27,26 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
             SWIFT_VERSION=5.0 \
-            2>&1 | tail -100
+            2>&1 | tail -120
 
       - name: Package IPA for TrollStore
         run: |
+          set -eux
+          ARCHIVE="$GITHUB_WORKSPACE/build/PanCloud.xcarchive"
+          echo "=== archive tree ==="
+          find "$ARCHIVE" -maxdepth 3 -name "*.app" -print || true
+          APP_PATH="$ARCHIVE/Products/Applications/PanCloud.app"
+          if [ ! -d "$APP_PATH" ]; then
+            echo "PanCloud.app not found, searching..."
+            APP_PATH=$(find "$ARCHIVE" -maxdepth 4 -name "PanCloud.app" -type d | head -1)
+          fi
+          echo "APP_PATH=$APP_PATH"
+          ls -la "$APP_PATH" | head
+          rm -rf "$GITHUB_WORKSPACE/build/ipa"
           mkdir -p "$GITHUB_WORKSPACE/build/ipa/Payload"
-          cp -R "$GITHUB_WORKSPACE/build/PanCloud.xcarchive/Products/Applications/PanCloud.app" \
-                "$GITHUB_WORKSPACE/build/ipa/Payload/"
+          cp -R "$APP_PATH" "$GITHUB_WORKSPACE/build/ipa/Payload/"
           cd "$GITHUB_WORKSPACE/build/ipa"
-          zip -r PanCloud.ipa Payload
+          zip -qry PanCloud.ipa Payload
           ls -lh PanCloud.ipa
 
       - name: Upload IPA
