@@ -202,43 +202,44 @@ class BaiduPanAPI {
             throw APIError.networkError(error)
         }
     }
-    
-    /// RC4 — 百度 sign2 下发的 JS 本质就是 RC4(key=sign3, data=sign1)
+        /// RC4 — 百度 sign2 下发的 JS 本质就是 RC4(key=sign3, data=sign1)
     private func rc4(key: String, data: String) -> Data {
-        let k = Array(key.utf8)
+        let kb = Array(key.utf8).map { Int($0) }
         var s = Array(0...255)
         var j = 0
         for i in 0...255 {
-            j = (j + s[i] + k[i % k.count]) % 256
+            j = (j + s[i] + kb[i % kb.count]) % 256
             s.swapAt(i, j)
         }
         var out = Data()
-        var i = 0, jj = 0
+        var i = 0
+        var jj = 0
         for byte in data.utf8 {
             i = (i + 1) % 256
             jj = (jj + s[i]) % 256
             s.swapAt(i, jj)
-            let k = s[(s[i] + s[jj]) % 256]
-            out.append(byte ^ k)
+            let kk = s[(s[i] + s[jj]) % 256]
+            out.append(UInt8(Int(byte) ^ kk))
         }
         return out
     }
 
     /// 实时取 bdstoken
     func bdstoken(cookie: String) async throws -> String {
-        let comps = URLComponents(string: "https://pan.baidu.com/api/gettemplatevariable")!
+        var comps = URLComponents(string: "https://pan.baidu.com/api/gettemplatevariable")!
         comps.queryItems = [
             URLQueryItem(name: "clienttype", value: "0"),
             URLQueryItem(name: "app_id", value: "250528"),
             URLQueryItem(name: "web", value: "1"),
-            URLQueryItem(name: "fields", value: #"["bdstoken"]"#)
+            URLQueryItem(name: "fields", value: "[\"bdstoken\"]")
         ]
         var req = URLRequest(url: comps.url!)
-        req.setValue(UA_WEB, forHTTPHeaderField: "User-Agent")
+        req.setValue(Self.UA_WEB, forHTTPHeaderField: "User-Agent")
         req.setValue(cookie, forHTTPHeaderField: "Cookie")
         let (data, _) = try await session.data(for: req)
         let j = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        guard (j?["errno"] as? Int) == 0, let bdstoken = (j?["result"] as? [String: Any])?["bdstoken"] as? String else {
+        guard (j?["errno"] as? Int) == 0,
+              let bdstoken = (j?["result"] as? [String: Any])?["bdstoken"] as? String else {
             throw APIError.parseFailed("bdstoken 取失败")
         }
         return bdstoken
@@ -246,25 +247,27 @@ class BaiduPanAPI {
 
     /// 实时取 sign (600s 过期)
     func sign(cookie: String) async throws -> (sign: String, timestamp: Int64) {
-        let comps = URLComponents(string: "https://pan.baidu.com/api/gettemplatevariable")!
+        var comps = URLComponents(string: "https://pan.baidu.com/api/gettemplatevariable")!
         comps.queryItems = [
             URLQueryItem(name: "clienttype", value: "0"),
             URLQueryItem(name: "app_id", value: "250528"),
             URLQueryItem(name: "web", value: "1"),
-            URLQueryItem(name: "fields", value: #"["sign1","sign2","sign3","timestamp"]"#)
+            URLQueryItem(name: "fields", value: "[\"sign1\",\"sign2\",\"sign3\",\"timestamp\"]")
         ]
         var req = URLRequest(url: comps.url!)
-        req.setValue(UA_WEB, forHTTPHeaderField: "User-Agent")
+        req.setValue(Self.UA_WEB, forHTTPHeaderField: "User-Agent")
         req.setValue(cookie, forHTTPHeaderField: "Cookie")
         let (data, _) = try await session.data(for: req)
         let j = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        guard (j?["errno"] as? Int) == 0, let r = j?["result"] as? [String: Any],
-              let sign1 = r["sign1"] as? String, let sign3 = r["sign3"] as? String,
-              let timestamp = r["timestamp"] as? Int64 else {
+        guard (j?["errno"] as? Int) == 0,
+              let r = j?["result"] as? [String: Any],
+              let sign1 = r["sign1"] as? String,
+              let sign3 = r["sign3"] as? String,
+              let tsNum = r["timestamp"] as? NSNumber else {
             throw APIError.parseFailed("sign 取失败")
         }
         let signed = rc4(key: sign3, data: sign1)
-        return (signed.base64EncodedString(), timestamp)
+        return (signed.base64EncodedString(), tsNum.int64Value)
     }
 
     /// 自己网盘零转存直链 (vip=2)
@@ -284,7 +287,7 @@ class BaiduPanAPI {
         ]
         var req = URLRequest(url: comps.url!)
         req.httpMethod = "POST"
-        req.setValue(UA_WEB, forHTTPHeaderField: "User-Agent")
+        req.setValue(Self.UA_WEB, forHTTPHeaderField: "User-Agent")
         req.setValue(cookie, forHTTPHeaderField: "Cookie")
         req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         let fidlist = fsIds.map { "\"\($0)\"" }.joined(separator: ",")
@@ -292,17 +295,10 @@ class BaiduPanAPI {
         req.httpBody = body.data(using: .utf8)
         let (data, _) = try await session.data(for: req)
         let j = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        guard (j?["errno"] as? Int) == 0, let dlinks = j?["dlink"] as? [[String: Any]] else {
-            throw APIError.parseFailed("dlink 解析失败: \(j ?? [:])")
+        guard (j?["errno"] as? Int) == 0,
+              let dlinks = j?["dlink"] as? [[String: Any]] else {
+            throw APIError.parseFailed("dlink 解析失败")
         }
         return dlinks.compactMap { $0["dlink"] as? String }
     }
-        var request = URLRequest(url: url)
-        request.setValue(cookie, forHTTPHeaderField: "Cookie")
-        request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)", forHTTPHeaderField: "User-Agent")
-        
-        let (tempURL, _) = try await session.download(for: request)
-        try FileManager.default.moveItem(at: tempURL, to: dest)
-    }
 }
-
